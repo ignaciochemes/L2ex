@@ -399,7 +399,10 @@ defmodule L2E.Packet.Client.RequestBypassToServer do
   end
 
   defp decode_utf16le(bin), do: do_utf16(bin, [])
-  defp do_utf16(<<0, 0, rest::binary>>, acc), do: {acc |> Enum.reverse() |> Enum.map_join(&<<&1::utf8>>), rest}
+
+  defp do_utf16(<<0, 0, rest::binary>>, acc),
+    do: {acc |> Enum.reverse() |> Enum.map_join(&<<&1::utf8>>), rest}
+
   defp do_utf16(<<cp::little-16, rest::binary>>, acc), do: do_utf16(rest, [cp | acc])
   defp do_utf16(_, _), do: :error
 end
@@ -427,9 +430,11 @@ defmodule L2E.Packet.Client.RequestBuyItem do
   def decode(_), do: {:error, :malformed}
 
   defp parse_items(_, 0, acc), do: Enum.reverse(acc)
+
   defp parse_items(<<item_id::little-32, count::little-64, rest::binary>>, n, acc) do
     parse_items(rest, n - 1, [{item_id, count} | acc])
   end
+
   defp parse_items(_, _, acc), do: Enum.reverse(acc)
 end
 
@@ -456,9 +461,15 @@ defmodule L2E.Packet.Client.RequestSellItem do
   def decode(_), do: {:error, :malformed}
 
   defp parse_items(_, 0, acc), do: Enum.reverse(acc)
-  defp parse_items(<<obj_id::little-32, item_id::little-32, count::little-64, rest::binary>>, n, acc) do
+
+  defp parse_items(
+         <<obj_id::little-32, item_id::little-32, count::little-64, rest::binary>>,
+         n,
+         acc
+       ) do
     parse_items(rest, n - 1, [{obj_id, item_id, count} | acc])
   end
+
   defp parse_items(_, _, acc), do: Enum.reverse(acc)
 end
 
@@ -505,7 +516,10 @@ defmodule L2E.Packet.Client.Say2 do
   end
 
   defp decode_utf16le(bin), do: do_utf16(bin, [])
-  defp do_utf16(<<0, 0, rest::binary>>, acc), do: {acc |> Enum.reverse() |> Enum.map_join(&<<&1::utf8>>), rest}
+
+  defp do_utf16(<<0, 0, rest::binary>>, acc),
+    do: {acc |> Enum.reverse() |> Enum.map_join(&<<&1::utf8>>), rest}
+
   defp do_utf16(<<cp::little-16, rest::binary>>, acc), do: do_utf16(rest, [cp | acc])
   defp do_utf16(_, _), do: :error
 end
@@ -534,15 +548,20 @@ defmodule L2E.Packet.Client.RequestJoinParty do
     case decode_utf16le(body) do
       {name, <<dist::little-32, _::binary>>} ->
         {:ok, %__MODULE__{target_name: name, distribution_type: dist}}
+
       {name, <<>>} ->
         {:ok, %__MODULE__{target_name: name, distribution_type: 1}}
+
       _ ->
         {:error, :malformed}
     end
   end
 
   defp decode_utf16le(bin), do: do_utf16(bin, [])
-  defp do_utf16(<<0, 0, rest::binary>>, acc), do: {acc |> Enum.reverse() |> Enum.map_join(&<<&1::utf8>>), rest}
+
+  defp do_utf16(<<0, 0, rest::binary>>, acc),
+    do: {acc |> Enum.reverse() |> Enum.map_join(&<<&1::utf8>>), rest}
+
   defp do_utf16(<<cp::little-16, rest::binary>>, acc), do: do_utf16(rest, [cp | acc])
   defp do_utf16(_, _), do: :error
 end
@@ -607,7 +626,10 @@ defmodule L2E.Packet.Client.RequestOustPartyMember do
   end
 
   defp decode_utf16le(bin), do: do_utf16(bin, [])
-  defp do_utf16(<<0, 0, rest::binary>>, acc), do: {acc |> Enum.reverse() |> Enum.map_join(&<<&1::utf8>>), rest}
+
+  defp do_utf16(<<0, 0, rest::binary>>, acc),
+    do: {acc |> Enum.reverse() |> Enum.map_join(&<<&1::utf8>>), rest}
+
   defp do_utf16(<<cp::little-16, rest::binary>>, acc), do: do_utf16(rest, [cp | acc])
   defp do_utf16(_, _), do: :error
 end
@@ -695,7 +717,10 @@ defmodule L2E.Packet.Client.RequestOustPledgeMember do
   end
 
   defp decode_utf16le(bin), do: do_utf16(bin, [])
-  defp do_utf16(<<0, 0, rest::binary>>, acc), do: {acc |> Enum.reverse() |> Enum.map_join(&<<&1::utf8>>), rest}
+
+  defp do_utf16(<<0, 0, rest::binary>>, acc),
+    do: {acc |> Enum.reverse() |> Enum.map_join(&<<&1::utf8>>), rest}
+
   defp do_utf16(<<cp::little-16, rest::binary>>, acc), do: do_utf16(rest, [cp | acc])
   defp do_utf16(_, _), do: :error
 end

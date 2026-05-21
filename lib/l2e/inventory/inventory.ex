@@ -148,9 +148,12 @@ defmodule L2E.Inventory do
 
   def handle_call(:get_adena_count, _from, state) do
     adena_id = 57
-    count = Enum.find_value(state.items, 0, fn {_, inst} ->
-      if inst.item_id == adena_id, do: inst.count || 0, else: nil
-    end)
+
+    count =
+      Enum.find_value(state.items, 0, fn {_, inst} ->
+        if inst.item_id == adena_id, do: inst.count || 0, else: nil
+      end)
+
     {:reply, count, state}
   end
 
@@ -173,9 +176,14 @@ defmodule L2E.Inventory do
             if new_count <= 0 do
               Repo.delete_all(from(i in Item, where: i.id == ^item_instance_id))
               new_items = Map.delete(state.items, item_instance_id)
-              {:reply, {:ok, :removed, {%{instance | count: 0}, template}}, %{state | items: new_items}}
+
+              {:reply, {:ok, :removed, {%{instance | count: 0}, template}},
+               %{state | items: new_items}}
             else
-              Repo.update_all(from(i in Item, where: i.id == ^item_instance_id), set: [count: new_count])
+              Repo.update_all(from(i in Item, where: i.id == ^item_instance_id),
+                set: [count: new_count]
+              )
+
               updated = %{instance | count: new_count}
               new_items = Map.put(state.items, item_instance_id, updated)
               {:reply, {:ok, :modified, {updated, template}}, %{state | items: new_items}}

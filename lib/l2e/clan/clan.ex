@@ -154,7 +154,15 @@ defmodule L2E.Clan do
           {:noreply, new_state}
         else
           leader_pid = get_pid(state, state.leader_id)
-          if leader_pid, do: send(leader_pid, {:send_packet, %Server.SystemMessage{message_id: Server.SystemMessage.msg_rejected()}})
+
+          if leader_pid,
+            do:
+              send(
+                leader_pid,
+                {:send_packet,
+                 %Server.SystemMessage{message_id: Server.SystemMessage.msg_rejected()}}
+              )
+
           {:noreply, state}
         end
     end
@@ -228,9 +236,21 @@ defmodule L2E.Clan do
 
     # Send member list to joining member
     if pid do
-      members_list = Enum.map(new_members, fn {id, m} -> %{char_name: m.char_name, level: m.level, class_id: m.class_id, object_id: id} end)
-      send(pid, {:send_packet, %Server.PledgeShowMemberListAll{clan_id: state.clan_id, members: members_list}})
-      send(pid, {:send_packet, %Server.SystemMessage{message_id: Server.SystemMessage.msg_joined_clan()}})
+      members_list =
+        Enum.map(new_members, fn {id, m} ->
+          %{char_name: m.char_name, level: m.level, class_id: m.class_id, object_id: id}
+        end)
+
+      send(
+        pid,
+        {:send_packet,
+         %Server.PledgeShowMemberListAll{clan_id: state.clan_id, members: members_list}}
+      )
+
+      send(
+        pid,
+        {:send_packet, %Server.SystemMessage{message_id: Server.SystemMessage.msg_joined_clan()}}
+      )
     end
 
     new_state
@@ -246,7 +266,12 @@ defmodule L2E.Clan do
 
         if member.pid do
           send(member.pid, :party_disbanded)
-          send(member.pid, {:send_packet, %Server.SystemMessage{message_id: Server.SystemMessage.msg_left_clan()}})
+
+          send(
+            member.pid,
+            {:send_packet,
+             %Server.SystemMessage{message_id: Server.SystemMessage.msg_left_clan()}}
+          )
         end
 
         delete_pkt = %Server.PledgeShowMemberListDelete{char_name: member.char_name}
@@ -275,7 +300,9 @@ defmodule L2E.Clan do
 
   defp broadcast_member_joined(state, new_char_id) do
     case Map.get(state.members, new_char_id) do
-      nil -> :ok
+      nil ->
+        :ok
+
       member ->
         pkt = %Server.PledgeShowMemberListAdd{
           char_name: member.char_name,

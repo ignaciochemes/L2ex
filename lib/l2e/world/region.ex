@@ -207,7 +207,14 @@ defmodule L2E.World.Region do
       stackable: 0
     }
 
-    item_data = %{object_id: object_id, item_id: item_id, position: {x, y, z}, count: count, packet: spawn_pkt}
+    item_data = %{
+      object_id: object_id,
+      item_id: item_id,
+      position: {x, y, z},
+      count: count,
+      packet: spawn_pkt
+    }
+
     new_ground_items = Map.put(state.ground_items, object_id, item_data)
 
     for {pid, _} <- state.entities do

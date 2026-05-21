@@ -967,7 +967,9 @@ defmodule L2E.Session.PlayerSession do
               send(state.conn_pid, {:send_packet, pkt})
 
             {:error, reason} ->
-              Logger.warning("[PlayerSession] Pickup add_item failed #{item_data.item_id}: #{inspect(reason)}")
+              Logger.warning(
+                "[PlayerSession] Pickup add_item failed #{item_data.item_id}: #{inspect(reason)}"
+              )
           end
       end
     end
@@ -1097,7 +1099,12 @@ defmodule L2E.Session.PlayerSession do
          %{auth_state: :in_world} = state
        ) do
     if state.char_name == target_name do
-      send(state.conn_pid, {:send_packet, %Server.SystemMessage{message_id: Server.SystemMessage.msg_cannot_invite_self()}})
+      send(
+        state.conn_pid,
+        {:send_packet,
+         %Server.SystemMessage{message_id: Server.SystemMessage.msg_cannot_invite_self()}}
+      )
+
       {:noreply, state}
     else
       case find_session_by_name(target_name) do
@@ -1197,7 +1204,10 @@ defmodule L2E.Session.PlayerSession do
             nil ->
               clan_id = :erlang.unique_integer([:positive, :monotonic])
               clan_name = "#{state.char_name}'s Clan"
-              {:ok, pid} = L2E.Clan.Supervisor.start_clan(clan_id, clan_name, state.char_id, self())
+
+              {:ok, pid} =
+                L2E.Clan.Supervisor.start_clan(clan_id, clan_name, state.char_id, self())
+
               pid
 
             pid ->
@@ -1456,11 +1466,21 @@ defmodule L2E.Session.PlayerSession do
 
     Enum.find_value(match, fn {key, pid, _} ->
       case key do
-        {:npc, _} -> nil
-        {:party, _} -> nil
-        {:party_member, _} -> nil
-        {:clan, _} -> nil
-        {:clan_member, _} -> nil
+        {:npc, _} ->
+          nil
+
+        {:party, _} ->
+          nil
+
+        {:party_member, _} ->
+          nil
+
+        {:clan, _} ->
+          nil
+
+        {:clan_member, _} ->
+          nil
+
         _char_id when is_integer(key) ->
           try do
             case GenServer.call(pid, :get_party_info, 500) do
@@ -1471,7 +1491,8 @@ defmodule L2E.Session.PlayerSession do
             :exit, _ -> nil
           end
 
-        _ -> nil
+        _ ->
+          nil
       end
     end)
   end
@@ -1510,7 +1531,10 @@ defmodule L2E.Session.PlayerSession do
     </body></html>
     """
 
-    send(state.conn_pid, {:send_packet, %Server.NpcHtmlMessage{npc_object_id: obj_id, html: html}})
+    send(
+      state.conn_pid,
+      {:send_packet, %Server.NpcHtmlMessage{npc_object_id: obj_id, html: html}}
+    )
   end
 
   # M16: Handle bypass commands from NPC dialogs
@@ -1545,11 +1569,15 @@ defmodule L2E.Session.PlayerSession do
 
     adena_count = Inventory.get_adena_count(state.char_id)
 
-    send(state.conn_pid, {:send_packet, %Server.BuyList{
-      npc_object_id: npc_id,
-      my_adena: adena_count,
-      items: buy_list_items
-    }})
+    send(
+      state.conn_pid,
+      {:send_packet,
+       %Server.BuyList{
+         npc_object_id: npc_id,
+         my_adena: adena_count,
+         items: buy_list_items
+       }}
+    )
 
     {:noreply, state}
   end
@@ -1561,9 +1589,12 @@ defmodule L2E.Session.PlayerSession do
   defp build_buy_list(_npc_id) do
     # Placeholder: return a few basic items for any merchant
     [
-      %{item_id: 57, price: 0},       # Adena (dummy)
-      %{item_id: 1835, price: 60},    # Health Potion
-      %{item_id: 1831, price: 40}     # Mana Potion
+      # Adena (dummy)
+      %{item_id: 57, price: 0},
+      # Health Potion
+      %{item_id: 1835, price: 60},
+      # Mana Potion
+      %{item_id: 1831, price: 40}
     ]
   end
 

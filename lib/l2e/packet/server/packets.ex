@@ -1044,13 +1044,13 @@ defmodule L2E.Packet.Server.BuyList do
   def encode(%__MODULE__{npc_object_id: npc_id, my_adena: adena, items: items}) do
     count = length(items)
     body = Enum.map_join(items, &encode_entry/1)
-    <<@opcode::8, npc_id::little-32, (adena || 0)::little-64, count::little-16>> <> body
+    <<@opcode::8, npc_id::little-32, adena || 0::little-64, count::little-16>> <> body
   end
 
   defp encode_entry(%{item_id: item_id, price: price}) do
     <<item_id::little-32, 0::little-16, item_id::little-32, 1::little-32, 0::little-16,
-      0::little-16, 0::little-16, 0::little-32, 0::little-16, 0::little-16,
-      0::little-32, 0::little-32, price::little-32>>
+      0::little-16, 0::little-16, 0::little-32, 0::little-16, 0::little-16, 0::little-32,
+      0::little-32, price::little-32>>
   end
 end
 
@@ -1155,8 +1155,7 @@ defmodule L2E.Packet.Server.SpawnItem do
   @impl L2E.Packet.Encodable
   def encode(%__MODULE__{} = p) do
     <<@opcode::8, p.object_id::little-32, p.item_id::little-32, p.x::little-32-signed,
-      p.y::little-32-signed, p.z::little-32-signed, p.stackable::little-32,
-      p.count::little-32>>
+      p.y::little-32-signed, p.z::little-32-signed, p.stackable::little-32, p.count::little-32>>
   end
 end
 
@@ -1204,7 +1203,7 @@ defmodule L2E.Packet.Server.AskJoinParty do
   @impl L2E.Packet.Encodable
   def encode(%__MODULE__{} = p) do
     name_bin = encode_utf16(p.requestor_name || "")
-    <<@opcode::8>> <> name_bin <> <<(p.distribution_type || 0)::little-32>>
+    <<@opcode::8>> <> name_bin <> <<p.distribution_type || 0::little-32>>
   end
 
   defp encode_utf16(str) do
@@ -1236,7 +1235,7 @@ defmodule L2E.Packet.Server.PartySmallWindowAll do
   def encode(%__MODULE__{distribution_type: dist, members: members}) do
     count = length(members)
     body = Enum.map_join(members, &encode_member/1)
-    <<@opcode::8, (dist || 0)::little-32, count::8>> <> body
+    <<@opcode::8, dist || 0::little-32, count::8>> <> body
   end
 
   defp encode_member(m) do
@@ -1246,7 +1245,7 @@ defmodule L2E.Packet.Server.PartySmallWindowAll do
     name_bin <>
       <<m.object_id::little-32, trunc(m[:hp] || 0)::little-32, trunc(m[:max_hp] || 0)::little-32,
         trunc(m[:mp] || 0)::little-32, trunc(m[:max_mp] || 0)::little-32, 0::little-32,
-        (m[:level] || 1)::8, (m[:class_id] || 0)::little-32, leader::8, 0::little-32>>
+        m[:level] || 1::8, m[:class_id] || 0::little-32, leader::8, 0::little-32>>
   end
 
   defp encode_utf16(str) do
@@ -1276,11 +1275,11 @@ defmodule L2E.Packet.Server.PartySmallWindowAdd do
     name_bin = encode_utf16(m.char_name || "")
     leader = if m[:is_leader], do: 1, else: 0
 
-    <<@opcode::8, (dist || 0)::little-32>> <>
+    <<@opcode::8, dist || 0::little-32>> <>
       name_bin <>
       <<m.object_id::little-32, trunc(m[:hp] || 0)::little-32, trunc(m[:max_hp] || 0)::little-32,
         trunc(m[:mp] || 0)::little-32, trunc(m[:max_mp] || 0)::little-32, 0::little-32,
-        (m[:level] || 1)::8, (m[:class_id] || 0)::little-32, leader::8, 0::little-32>>
+        m[:level] || 1::8, m[:class_id] || 0::little-32, leader::8, 0::little-32>>
   end
 
   defp encode_utf16(str) do
@@ -1390,13 +1389,15 @@ defmodule L2E.Packet.Server.PledgeShowMemberListAll do
   def encode(%__MODULE__{clan_id: clan_id, members: members}) do
     count = length(members)
     body = Enum.map_join(members, &encode_member/1)
-    <<@opcode::8, 0::little-32, (clan_id || 0)::little-32, count::little-32>> <> body
+    <<@opcode::8, 0::little-32, clan_id || 0::little-32, count::little-32>> <> body
   end
 
   defp encode_member(m) do
     name_bin = encode_utf16(m.char_name || "")
-    name_bin <> <<(m[:level] || 1)::little-32, (m[:class_id] || 0)::little-32,
-      m.object_id::little-32, 1::little-32>>
+
+    name_bin <>
+      <<m[:level] || 1::little-32, m[:class_id] || 0::little-32, m.object_id::little-32,
+        1::little-32>>
   end
 
   defp encode_utf16(str) do
@@ -1423,8 +1424,11 @@ defmodule L2E.Packet.Server.PledgeShowMemberListAdd do
   @impl L2E.Packet.Encodable
   def encode(%__MODULE__{} = p) do
     name_bin = encode_utf16(p.char_name || "")
-    <<@opcode::8>> <> name_bin <> <<(p.level || 1)::little-32, (p.class_id || 0)::little-32,
-      p.object_id::little-32, 1::little-32>>
+
+    <<@opcode::8>> <>
+      name_bin <>
+      <<p.level || 1::little-32, p.class_id || 0::little-32, p.object_id::little-32,
+        1::little-32>>
   end
 
   defp encode_utf16(str) do

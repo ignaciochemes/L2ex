@@ -124,13 +124,22 @@ defmodule L2E.NPC.SpawnTable do
           )
           |> Enum.flat_map(fn row ->
             case {row.x, row.y, row.z} do
-              {"", _, _} -> []
-              {_, "", _} -> []
-              {_, _, ""} -> []
+              {"", _, _} ->
+                []
+
+              {_, "", _} ->
+                []
+
+              {_, _, ""} ->
+                []
+
               {x, y, z} ->
-                respawn_ms = max((parse_int(row.respawn_delay, 60)) * 1_000, 5_000)
-                [{row.id, String.to_integer(x), String.to_integer(y), String.to_integer(z),
-                  parse_int(row.heading, 0), respawn_ms}]
+                respawn_ms = max(parse_int(row.respawn_delay, 60) * 1_000, 5_000)
+
+                [
+                  {row.id, String.to_integer(x), String.to_integer(y), String.to_integer(z),
+                   parse_int(row.heading, 0), respawn_ms}
+                ]
             end
           end)
         rescue

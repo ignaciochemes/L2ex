@@ -172,7 +172,11 @@ defmodule L2E.Party do
           leader_pid = get_pid(state, state.leader_id)
 
           if leader_pid do
-            send(leader_pid, {:send_packet, %Server.SystemMessage{message_id: Server.SystemMessage.msg_rejected()}})
+            send(
+              leader_pid,
+              {:send_packet,
+               %Server.SystemMessage{message_id: Server.SystemMessage.msg_rejected()}}
+            )
           end
 
           {:noreply, state}
@@ -277,13 +281,20 @@ defmodule L2E.Party do
     # Send party window to new member
     members_list = build_member_list(new_state)
 
-    send(pid, {:send_packet, %Server.PartySmallWindowAll{
-      distribution_type: state.distribution_type,
-      members: members_list
-    }})
+    send(
+      pid,
+      {:send_packet,
+       %Server.PartySmallWindowAll{
+         distribution_type: state.distribution_type,
+         members: members_list
+       }}
+    )
 
     # Ack join
-    send(pid, {:send_packet, %Server.SystemMessage{message_id: Server.SystemMessage.msg_joined_party()}})
+    send(
+      pid,
+      {:send_packet, %Server.SystemMessage{message_id: Server.SystemMessage.msg_joined_party()}}
+    )
 
     new_state
   end
@@ -298,10 +309,18 @@ defmodule L2E.Party do
 
         # Notify removed member
         send(member.pid, :party_disbanded)
-        send(member.pid, {:send_packet, %Server.SystemMessage{message_id: Server.SystemMessage.msg_left_party()}})
+
+        send(
+          member.pid,
+          {:send_packet, %Server.SystemMessage{message_id: Server.SystemMessage.msg_left_party()}}
+        )
 
         # Notify others
-        delete_pkt = %Server.PartySmallWindowDelete{object_id: char_id, char_name: member.char_name}
+        delete_pkt = %Server.PartySmallWindowDelete{
+          object_id: char_id,
+          char_name: member.char_name
+        }
+
         new_state = %{state | members: remaining}
         broadcast_to_all(new_state, {:send_packet, delete_pkt})
 
@@ -310,7 +329,12 @@ defmodule L2E.Party do
           Enum.each(remaining, fn {id, m} ->
             unregister_member(id)
             send(m.pid, :party_disbanded)
-            send(m.pid, {:send_packet, %Server.SystemMessage{message_id: Server.SystemMessage.msg_left_party()}})
+
+            send(
+              m.pid,
+              {:send_packet,
+               %Server.SystemMessage{message_id: Server.SystemMessage.msg_left_party()}}
+            )
           end)
 
           Logger.info("[Party] Disbanded (too few members)")
@@ -394,13 +418,34 @@ defmodule L2E.Party do
   end
 
   defp fetch_member_info(char_id, pid) do
-    base = %{char_id: char_id, char_name: "", pid: pid, hp: 0.0, max_hp: 0.0, mp: 0.0, max_mp: 0.0, level: 1, class_id: 0}
+    base = %{
+      char_id: char_id,
+      char_name: "",
+      pid: pid,
+      hp: 0.0,
+      max_hp: 0.0,
+      mp: 0.0,
+      max_mp: 0.0,
+      level: 1,
+      class_id: 0
+    }
 
     case GenServer.call(pid, :get_party_info, 1000) do
       {:ok, info} -> Map.merge(base, info)
       _ -> base
     end
   rescue
-    _ -> %{char_id: char_id, char_name: "", pid: pid, hp: 0.0, max_hp: 0.0, mp: 0.0, max_mp: 0.0, level: 1, class_id: 0}
+    _ ->
+      %{
+        char_id: char_id,
+        char_name: "",
+        pid: pid,
+        hp: 0.0,
+        max_hp: 0.0,
+        mp: 0.0,
+        max_mp: 0.0,
+        level: 1,
+        class_id: 0
+      }
   end
 end

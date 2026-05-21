@@ -13,7 +13,10 @@ defmodule L2E.Clan.Supervisor do
 
   @doc "Start a new clan process."
   def start_clan(clan_id, clan_name, leader_id, leader_pid) do
-    spec = {L2E.Clan, [clan_id: clan_id, clan_name: clan_name, leader_id: leader_id, leader_pid: leader_pid]}
+    spec =
+      {L2E.Clan,
+       [clan_id: clan_id, clan_name: clan_name, leader_id: leader_id, leader_pid: leader_pid]}
+
     DynamicSupervisor.start_child(__MODULE__, spec)
   end
 end
