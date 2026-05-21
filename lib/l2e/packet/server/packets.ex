@@ -968,3 +968,493 @@ defmodule L2E.Packet.Server.AbnormalStatusUpdate do
     <<@opcode::8, count::little-16>> <> effects_bin
   end
 end
+
+# ── M16: NPC Interaction ──────────────────────────────────────────────────────
+
+defmodule L2E.Packet.Server.NpcHtmlMessage do
+  @moduledoc """
+  Opcode 0x0F — sends an HTML dialog from an NPC to the client.
+
+  Binary layout (NpcHtmlMessage.java):
+    npc_object_id(32) html(string)
+
+  Reference: ServerPackets.NPC_HTML_MESSAGE(0x0F)
+  """
+  @behaviour L2E.Packet.Encodable
+
+  defstruct [:npc_object_id, :html]
+  @type t :: %__MODULE__{}
+
+  @opcode 0x0F
+
+  @impl L2E.Packet.Encodable
+  def encode(%__MODULE__{npc_object_id: npc_id, html: html}) do
+    html_bin = encode_utf16(html || "")
+    <<@opcode::8, npc_id::little-32>> <> html_bin
+  end
+
+  defp encode_utf16(str) do
+    :unicode.characters_to_binary(str, :utf8, {:utf16, :little}) <> <<0::16>>
+  end
+end
+
+defmodule L2E.Packet.Server.ActionFail do
+  @moduledoc """
+  Opcode 0x25 — tells the client an action failed (e.g. out of range).
+
+  Binary layout (ActionFail.java):
+    (no body — opcode only)
+
+  Reference: ServerPackets.ACTION_FAIL(0x25)
+  """
+  @behaviour L2E.Packet.Encodable
+
+  defstruct []
+  @type t :: %__MODULE__{}
+
+  @opcode 0x25
+
+  @impl L2E.Packet.Encodable
+  def encode(%__MODULE__{}) do
+    <<@opcode::8, 0::little-32>>
+  end
+end
+
+defmodule L2E.Packet.Server.BuyList do
+  @moduledoc """
+  Opcode 0x11 — sends the list of items a merchant NPC sells.
+
+  Binary layout (BuyList.java):
+    npc_object_id(32) my_adena(64) count(16) + per item:
+      item_id(32) item_type1(16) object_id(32) count(32) item_type2(16)
+      custom1(16) equipped(16) bodypart(32) enchant(16) custom2(16)
+      aug(32) element(32) price(32)
+
+  Reference: ServerPackets.BUY_LIST(0x11)
+  """
+  @behaviour L2E.Packet.Encodable
+
+  # items: list of %{item_id, price}
+  defstruct [:npc_object_id, :my_adena, items: []]
+  @type t :: %__MODULE__{}
+
+  @opcode 0x11
+
+  @impl L2E.Packet.Encodable
+  def encode(%__MODULE__{npc_object_id: npc_id, my_adena: adena, items: items}) do
+    count = length(items)
+    body = Enum.map_join(items, &encode_entry/1)
+    <<@opcode::8, npc_id::little-32, (adena || 0)::little-64, count::little-16>> <> body
+  end
+
+  defp encode_entry(%{item_id: item_id, price: price}) do
+    <<item_id::little-32, 0::little-16, item_id::little-32, 1::little-32, 0::little-16,
+      0::little-16, 0::little-16, 0::little-32, 0::little-16, 0::little-16,
+      0::little-32, 0::little-32, price::little-32>>
+  end
+end
+
+# ── M17: Chat System ──────────────────────────────────────────────────────────
+
+defmodule L2E.Packet.Server.CreatureSay do
+  @moduledoc """
+  Opcode 0x4A — broadcasts a chat message from a creature to nearby players.
+
+  chat_type:
+    0 = SAY      1 = SHOUT     2 = TELL
+    3 = PARTY    4 = CLAN      8 = TRADE
+    12 = HERO   17 = ALL_WORLD
+
+  Binary layout (CreatureSay.java):
+    char_id(32) chat_type(32) char_name(string) message(string)
+
+  Reference: ServerPackets.CREATURE_SAY(0x4A)
+  """
+  @behaviour L2E.Packet.Encodable
+
+  defstruct [:char_id, :chat_type, :char_name, :message]
+  @type t :: %__MODULE__{}
+
+  @opcode 0x4A
+
+  @impl L2E.Packet.Encodable
+  def encode(%__MODULE__{} = p) do
+    name_bin = encode_utf16(p.char_name || "")
+    msg_bin = encode_utf16(p.message || "")
+    <<@opcode::8, p.char_id::little-32, p.chat_type::little-32>> <> name_bin <> msg_bin
+  end
+
+  defp encode_utf16(str) do
+    :unicode.characters_to_binary(str, :utf8, {:utf16, :little}) <> <<0::16>>
+  end
+end
+
+defmodule L2E.Packet.Server.SystemMessage do
+  @moduledoc """
+  Opcode 0x64 — sends a predefined system message to the client.
+
+  The client renders the message_id from its own message table (syschat.dat).
+
+  Common message IDs:
+    1281 = "You cannot invite yourself to a party."
+    1305 = "You have joined a party."
+    1306 = "You have left the party."
+    1308 = "%s has joined the party."
+    1309 = "%s has left the party."
+    1332 = "You have joined the clan."
+    1333 = "You have left the clan."
+    614  = "Your invitation was rejected."
+
+  Binary layout (SystemMessage.java):
+    message_id(32)
+
+  Reference: ServerPackets.SYSTEM_MESSAGE(0x64)
+  """
+  @behaviour L2E.Packet.Encodable
+
+  defstruct [:message_id]
+  @type t :: %__MODULE__{}
+
+  @opcode 0x64
+
+  # Common system message IDs
+  def msg_cannot_invite_self, do: 1281
+  def msg_joined_party, do: 1305
+  def msg_left_party, do: 1306
+  def msg_member_joined_party, do: 1308
+  def msg_member_left_party, do: 1309
+  def msg_joined_clan, do: 1332
+  def msg_left_clan, do: 1333
+  def msg_rejected, do: 614
+  def msg_party_full, do: 1307
+
+  @impl L2E.Packet.Encodable
+  def encode(%__MODULE__{message_id: id}) do
+    <<@opcode::8, id::little-32>>
+  end
+end
+
+# ── M18: Ground Items ─────────────────────────────────────────────────────────
+
+defmodule L2E.Packet.Server.SpawnItem do
+  @moduledoc """
+  Opcode 0x0B — spawns an item on the ground (drop effect).
+
+  Binary layout (SpawnItem.java):
+    object_id(32) item_id(32) x(32) y(32) z(32) stackable(32) count(32)
+
+  Reference: ServerPackets.SPAWN_ITEM(0x0B)
+  """
+  @behaviour L2E.Packet.Encodable
+
+  defstruct [:object_id, :item_id, :x, :y, :z, :count, stackable: 0]
+  @type t :: %__MODULE__{}
+
+  @opcode 0x0B
+
+  @impl L2E.Packet.Encodable
+  def encode(%__MODULE__{} = p) do
+    <<@opcode::8, p.object_id::little-32, p.item_id::little-32, p.x::little-32-signed,
+      p.y::little-32-signed, p.z::little-32-signed, p.stackable::little-32,
+      p.count::little-32>>
+  end
+end
+
+defmodule L2E.Packet.Server.GetItem do
+  @moduledoc """
+  Opcode 0x0D — tells nearby players that a ground item was picked up.
+
+  Binary layout (GetItem.java):
+    char_id(32) object_id(32) x(32) y(32) z(32)
+
+  Reference: ServerPackets.GET_ITEM(0x0D)
+  """
+  @behaviour L2E.Packet.Encodable
+
+  defstruct [:char_id, :object_id, :x, :y, :z]
+  @type t :: %__MODULE__{}
+
+  @opcode 0x0D
+
+  @impl L2E.Packet.Encodable
+  def encode(%__MODULE__{} = p) do
+    <<@opcode::8, p.char_id::little-32, p.object_id::little-32, p.x::little-32-signed,
+      p.y::little-32-signed, p.z::little-32-signed>>
+  end
+end
+
+# ── M21: Party ────────────────────────────────────────────────────────────────
+
+defmodule L2E.Packet.Server.AskJoinParty do
+  @moduledoc """
+  Opcode 0x39 — asks the player to join a party.
+
+  Binary layout (AskJoinParty.java):
+    requestor_name(string) distribution_type(32)
+
+  Reference: ServerPackets.ASK_JOIN_PARTY(0x39)
+  """
+  @behaviour L2E.Packet.Encodable
+
+  defstruct [:requestor_name, :distribution_type]
+  @type t :: %__MODULE__{}
+
+  @opcode 0x39
+
+  @impl L2E.Packet.Encodable
+  def encode(%__MODULE__{} = p) do
+    name_bin = encode_utf16(p.requestor_name || "")
+    <<@opcode::8>> <> name_bin <> <<(p.distribution_type || 0)::little-32>>
+  end
+
+  defp encode_utf16(str) do
+    :unicode.characters_to_binary(str, :utf8, {:utf16, :little}) <> <<0::16>>
+  end
+end
+
+defmodule L2E.Packet.Server.PartySmallWindowAll do
+  @moduledoc """
+  Opcode 0x4E — sends the full party state to a member.
+
+  Binary layout (PartySmallWindowAll.java):
+    distribution_type(32) count(8) + per member:
+      char_name(string) object_id(32) cur_hp(32) max_hp(32)
+      cur_mp(32) max_mp(32) vitality(32) level(8) class_id(32)
+      is_leader(8) race(32)
+
+  Reference: ServerPackets.PARTY_SMALL_WINDOW_ALL(0x4E)
+  """
+  @behaviour L2E.Packet.Encodable
+
+  # members: list of %{char_name, object_id, hp, max_hp, mp, max_mp, level, class_id, is_leader}
+  defstruct [:distribution_type, members: []]
+  @type t :: %__MODULE__{}
+
+  @opcode 0x4E
+
+  @impl L2E.Packet.Encodable
+  def encode(%__MODULE__{distribution_type: dist, members: members}) do
+    count = length(members)
+    body = Enum.map_join(members, &encode_member/1)
+    <<@opcode::8, (dist || 0)::little-32, count::8>> <> body
+  end
+
+  defp encode_member(m) do
+    name_bin = encode_utf16(m.char_name || "")
+    leader = if m[:is_leader], do: 1, else: 0
+
+    name_bin <>
+      <<m.object_id::little-32, trunc(m[:hp] || 0)::little-32, trunc(m[:max_hp] || 0)::little-32,
+        trunc(m[:mp] || 0)::little-32, trunc(m[:max_mp] || 0)::little-32, 0::little-32,
+        (m[:level] || 1)::8, (m[:class_id] || 0)::little-32, leader::8, 0::little-32>>
+  end
+
+  defp encode_utf16(str) do
+    :unicode.characters_to_binary(str, :utf8, {:utf16, :little}) <> <<0::16>>
+  end
+end
+
+defmodule L2E.Packet.Server.PartySmallWindowAdd do
+  @moduledoc """
+  Opcode 0x4F — notifies existing party members that a new member joined.
+
+  Binary layout (PartySmallWindowAdd.java):
+    distribution_type(32) + member fields (same as PartySmallWindowAll member)
+
+  Reference: ServerPackets.PARTY_SMALL_WINDOW_ADD(0x4F)
+  """
+  @behaviour L2E.Packet.Encodable
+
+  # member: %{char_name, object_id, hp, max_hp, mp, max_mp, level, class_id, is_leader}
+  defstruct [:distribution_type, :member]
+  @type t :: %__MODULE__{}
+
+  @opcode 0x4F
+
+  @impl L2E.Packet.Encodable
+  def encode(%__MODULE__{distribution_type: dist, member: m}) do
+    name_bin = encode_utf16(m.char_name || "")
+    leader = if m[:is_leader], do: 1, else: 0
+
+    <<@opcode::8, (dist || 0)::little-32>> <>
+      name_bin <>
+      <<m.object_id::little-32, trunc(m[:hp] || 0)::little-32, trunc(m[:max_hp] || 0)::little-32,
+        trunc(m[:mp] || 0)::little-32, trunc(m[:max_mp] || 0)::little-32, 0::little-32,
+        (m[:level] || 1)::8, (m[:class_id] || 0)::little-32, leader::8, 0::little-32>>
+  end
+
+  defp encode_utf16(str) do
+    :unicode.characters_to_binary(str, :utf8, {:utf16, :little}) <> <<0::16>>
+  end
+end
+
+defmodule L2E.Packet.Server.PartySmallWindowDelete do
+  @moduledoc """
+  Opcode 0x51 — notifies party members that a member has left.
+
+  Binary layout (PartySmallWindowDelete.java):
+    object_id(32) char_name(string)
+
+  Reference: ServerPackets.PARTY_SMALL_WINDOW_DELETE(0x51)
+  """
+  @behaviour L2E.Packet.Encodable
+
+  defstruct [:object_id, :char_name]
+  @type t :: %__MODULE__{}
+
+  @opcode 0x51
+
+  @impl L2E.Packet.Encodable
+  def encode(%__MODULE__{} = p) do
+    name_bin = encode_utf16(p.char_name || "")
+    <<@opcode::8, p.object_id::little-32>> <> name_bin
+  end
+
+  defp encode_utf16(str) do
+    :unicode.characters_to_binary(str, :utf8, {:utf16, :little}) <> <<0::16>>
+  end
+end
+
+defmodule L2E.Packet.Server.PartySmallWindowUpdate do
+  @moduledoc """
+  Opcode 0x52 — updates a party member's vitals in the party window.
+
+  Binary layout (PartySmallWindowUpdate.java):
+    object_id(32) cur_hp(32) max_hp(32) cur_mp(32) max_mp(32) vitality(32)
+
+  Reference: ServerPackets.PARTY_SMALL_WINDOW_UPDATE(0x52)
+  """
+  @behaviour L2E.Packet.Encodable
+
+  defstruct [:object_id, :hp, :max_hp, :mp, :max_mp]
+  @type t :: %__MODULE__{}
+
+  @opcode 0x52
+
+  @impl L2E.Packet.Encodable
+  def encode(%__MODULE__{} = p) do
+    <<@opcode::8, p.object_id::little-32, trunc(p.hp || 0)::little-32,
+      trunc(p.max_hp || 0)::little-32, trunc(p.mp || 0)::little-32,
+      trunc(p.max_mp || 0)::little-32, 0::little-32>>
+  end
+end
+
+# ── M22: Clans ────────────────────────────────────────────────────────────────
+
+defmodule L2E.Packet.Server.AskJoinPledge do
+  @moduledoc """
+  Opcode 0x32 — asks the player to join a clan.
+
+  Binary layout (AskJoinPledge.java):
+    requestor_id(32) clan_name(string)
+
+  Reference: ServerPackets.ASK_JOIN_PLEDGE(0x32)
+  """
+  @behaviour L2E.Packet.Encodable
+
+  defstruct [:requestor_id, :clan_name]
+  @type t :: %__MODULE__{}
+
+  @opcode 0x32
+
+  @impl L2E.Packet.Encodable
+  def encode(%__MODULE__{} = p) do
+    name_bin = encode_utf16(p.clan_name || "")
+    <<@opcode::8, p.requestor_id::little-32>> <> name_bin
+  end
+
+  defp encode_utf16(str) do
+    :unicode.characters_to_binary(str, :utf8, {:utf16, :little}) <> <<0::16>>
+  end
+end
+
+defmodule L2E.Packet.Server.PledgeShowMemberListAll do
+  @moduledoc """
+  Opcode 0x53 — sends the full clan member list.
+
+  Binary layout (PledgeShowMemberListAll.java):
+    type(32) clan_id(32) count(32) + per member:
+      char_name(string) level(32) class_id(32) object_id(32) pledged(32)
+
+  Reference: ServerPackets.PLEDGE_SHOW_MEMBER_LIST_ALL(0x53)
+  """
+  @behaviour L2E.Packet.Encodable
+
+  # members: list of %{char_name, level, class_id, object_id}
+  defstruct [:clan_id, members: []]
+  @type t :: %__MODULE__{}
+
+  @opcode 0x53
+
+  @impl L2E.Packet.Encodable
+  def encode(%__MODULE__{clan_id: clan_id, members: members}) do
+    count = length(members)
+    body = Enum.map_join(members, &encode_member/1)
+    <<@opcode::8, 0::little-32, (clan_id || 0)::little-32, count::little-32>> <> body
+  end
+
+  defp encode_member(m) do
+    name_bin = encode_utf16(m.char_name || "")
+    name_bin <> <<(m[:level] || 1)::little-32, (m[:class_id] || 0)::little-32,
+      m.object_id::little-32, 1::little-32>>
+  end
+
+  defp encode_utf16(str) do
+    :unicode.characters_to_binary(str, :utf8, {:utf16, :little}) <> <<0::16>>
+  end
+end
+
+defmodule L2E.Packet.Server.PledgeShowMemberListAdd do
+  @moduledoc """
+  Opcode 0x55 — notifies existing clan members that a new member joined.
+
+  Binary layout (PledgeShowMemberListAdd.java):
+    char_name(string) level(32) class_id(32) object_id(32) pledged(32)
+
+  Reference: ServerPackets.PLEDGE_SHOW_MEMBER_LIST_ADD(0x55)
+  """
+  @behaviour L2E.Packet.Encodable
+
+  defstruct [:char_name, :level, :class_id, :object_id]
+  @type t :: %__MODULE__{}
+
+  @opcode 0x55
+
+  @impl L2E.Packet.Encodable
+  def encode(%__MODULE__{} = p) do
+    name_bin = encode_utf16(p.char_name || "")
+    <<@opcode::8>> <> name_bin <> <<(p.level || 1)::little-32, (p.class_id || 0)::little-32,
+      p.object_id::little-32, 1::little-32>>
+  end
+
+  defp encode_utf16(str) do
+    :unicode.characters_to_binary(str, :utf8, {:utf16, :little}) <> <<0::16>>
+  end
+end
+
+defmodule L2E.Packet.Server.PledgeShowMemberListDelete do
+  @moduledoc """
+  Opcode 0x56 — notifies clan members that a member has left.
+
+  Binary layout (PledgeShowMemberListDelete.java):
+    char_name(string)
+
+  Reference: ServerPackets.PLEDGE_SHOW_MEMBER_LIST_DELETE(0x56)
+  """
+  @behaviour L2E.Packet.Encodable
+
+  defstruct [:char_name]
+  @type t :: %__MODULE__{}
+
+  @opcode 0x56
+
+  @impl L2E.Packet.Encodable
+  def encode(%__MODULE__{char_name: name}) do
+    name_bin = encode_utf16(name || "")
+    <<@opcode::8>> <> name_bin
+  end
+
+  defp encode_utf16(str) do
+    :unicode.characters_to_binary(str, :utf8, {:utf16, :little}) <> <<0::16>>
+  end
+end

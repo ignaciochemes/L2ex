@@ -33,6 +33,12 @@ defmodule L2E.Application do
       L2E.NPC.Supervisor,
       L2E.NPC.SpawnTable,
 
+      # Party supervisor — manages active party processes
+      L2E.Party.Supervisor,
+
+      # Clan supervisor — manages active clan processes
+      L2E.Clan.Supervisor,
+
       # Login Server — must start before game server so AccountStore is ready
       L2E.LoginServer.Supervisor,
 

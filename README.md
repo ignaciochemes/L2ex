@@ -105,6 +105,8 @@ graph TB
         App --> InvSup[Inventory.Supervisor<br/>DynamicSupervisor]
         App --> NpcSup[NPC.Supervisor<br/>DynamicSupervisor]
         App --> SpawnTbl[NPC.SpawnTable]
+        App --> PartySup[Party.Supervisor<br/>DynamicSupervisor]
+        App --> ClanSup[Clan.Supervisor<br/>DynamicSupervisor]
         App --> LoginSup[LoginServer.Supervisor]
         App --> NetSup[Network.Supervisor]
     end
@@ -371,18 +373,22 @@ L2E:      1.0   2.0   3.9   7.8   15.4  (near-linear)
 | M13 – Death & respawn | Die packet, dead state, 30s respawn timer, `Revive` packet |
 | M14 – XP / leveling | NPC `exp_reward` from XML, XP grant, level-up detection, `SocialAction` |
 | M15 – Character creation | Starting position by race, initial equipment from `initialEquipment.xml` |
+| M16 – NPC interaction | Click NPC → `NpcHtmlMessage` dialog; bypass commands; buy/sell via `BuyList` |
+| M17 – Chat system | `Say2` routed by type: say/shout to region, whisper to session, party/clan to group |
+| M18 – Ground items | NPC drops spawn in region (`SpawnItem`); `RequestPickUpItem` → inventory + `GetItem` anim |
+| M19 – Skill casting on NPCs | `RequestMagicSkillUse` → `deal_damage_to_target` with skill multipliers |
+| M20 – Geodata stubs | `L2E.Geodata` module with permissive `can_see?/2`, `can_move?/3`, `get_height/3` |
+| M21 – Parties | `Party` GenServer + `Party.Supervisor`; invite/accept/leave/kick; vitals broadcast to party window |
+| M22 – Clans | `Clan` GenServer + `Clan.Supervisor`; invite/accept/leave/kick; member list broadcast |
 
-### In progress / next
+### Next
 
 | Milestone | Description |
 |-----------|-------------|
-| M16 – NPC interaction | Shop, teleport, quest NPC dialogs |
-| M17 – Chat system | Say, shout, whisper, party chat |
-| M18 – Ground items | Drop to world, pickup, despawn timer |
-| M19 – Skill casting on NPCs | Target NPC → `RequestMagicSkillUse` → damage + effects |
-| M20 – Geodata | Movement validation against heightmap / passability |
-| M21 – Parties | Party creation, XP sharing, party chat |
-| M22 – Clans | Clan creation, ranks, clan wars |
+| M23 – NPC shop data | Load merchant item lists from `L2J_Mobius_CT_0_Interlude/data/merchants/` XML |
+| M24 – Geodata heightmap | Replace stubs with real `.l2j` geodata files for movement validation |
+| M25 – Quests | Quest state machine, quest items, NPC quest flags |
+| M26 – Olympiad / PvP zones | Zone types, peace zones, PvP flag system |
 
 ---
 

@@ -116,15 +116,22 @@ defmodule L2E.NPC.SpawnTable do
           |> xpath(
             ~x"//spawn/npc"l,
             id: ~x"./@id"i,
-            x: ~x"./@x"i,
-            y: ~x"./@y"i,
-            z: ~x"./@z"i,
-            heading: ~x"./@heading"i,
-            respawn_delay: ~x"./@respawnDelay"i
+            x: ~x"./@x"s,
+            y: ~x"./@y"s,
+            z: ~x"./@z"s,
+            heading: ~x"./@heading"s,
+            respawn_delay: ~x"./@respawnDelay"s
           )
-          |> Enum.map(fn row ->
-            respawn_ms = max((row.respawn_delay || 60) * 1_000, 5_000)
-            {row.id, row.x, row.y, row.z, row.heading || 0, respawn_ms}
+          |> Enum.flat_map(fn row ->
+            case {row.x, row.y, row.z} do
+              {"", _, _} -> []
+              {_, "", _} -> []
+              {_, _, ""} -> []
+              {x, y, z} ->
+                respawn_ms = max((parse_int(row.respawn_delay, 60)) * 1_000, 5_000)
+                [{row.id, String.to_integer(x), String.to_integer(y), String.to_integer(z),
+                  parse_int(row.heading, 0), respawn_ms}]
+            end
           end)
         rescue
           e ->
@@ -171,4 +178,7 @@ defmodule L2E.NPC.SpawnTable do
       {%{state | next_id: object_id + 1}, nil}
     end
   end
+
+  defp parse_int("", default), do: default
+  defp parse_int(s, _), do: String.to_integer(s)
 end

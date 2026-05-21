@@ -149,7 +149,8 @@ defmodule L2E.NPC.Instance do
       position: state.position,
       heading: state.heading,
       hp: state.hp,
-      max_hp: state.template.max_hp
+      max_hp: state.template.max_hp,
+      template: state.template
     }
 
     {:reply, info, state}
@@ -374,13 +375,16 @@ defmodule L2E.NPC.Instance do
     die_packet = %Server.Die{object_id: state.object_id, can_sweep: false}
     broadcast_to_region(state, die_packet)
 
-    # Send drops directly to the killer's PlayerSession
-    if is_pid(state.target_pid) and Process.alive?(state.target_pid) do
-      drops = DropResolver.resolve(state.template)
+    # M18: Drop items as ground items in the region (visible to all players)
+    drops = DropResolver.resolve(state.template)
 
-      unless drops == [] do
-        GenServer.cast(state.target_pid, {:receive_drops, drops})
-      end
+    unless drops == [] or is_nil(state.region_pid) do
+      {x, y, z} = state.position
+
+      Enum.each(drops, fn {item_id, count} ->
+        obj_id = :erlang.unique_integer([:positive, :monotonic])
+        GenServer.cast(state.region_pid, {:drop_item, obj_id, item_id, x, y, z, count})
+      end)
     end
 
     # Send EXP/SP reward to the killer

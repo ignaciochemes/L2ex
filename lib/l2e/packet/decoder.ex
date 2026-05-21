@@ -46,8 +46,24 @@ defmodule L2E.Packet.Decoder do
   def decode(0x0E, body), do: Client.NewCharacter.decode(body)
   def decode(0x16, body), do: Client.RequestPickUpItem.decode(body)
   def decode(0x19, body), do: Client.UseItem.decode(body)
+  # M16: NPC interaction
+  def decode(0x1E, body), do: Client.RequestSellItem.decode(body)
+  def decode(0x1F, body), do: Client.RequestBuyItem.decode(body)
+  def decode(0x21, body), do: Client.RequestBypassToServer.decode(body)
+  # M22: Clans
+  def decode(0x24, body), do: Client.RequestJoinPledge.decode(body)
+  def decode(0x25, body), do: Client.RequestAnswerJoinPledge.decode(body)
+  def decode(0x26, body), do: Client.RequestWithdrawalPledge.decode(body)
+  def decode(0x27, body), do: Client.RequestOustPledgeMember.decode(body)
+  # M21: Party
+  def decode(0x29, body), do: Client.RequestJoinParty.decode(body)
+  def decode(0x2A, body), do: Client.RequestAnswerJoinParty.decode(body)
+  def decode(0x2B, body), do: Client.RequestWithDrawalParty.decode(body)
+  def decode(0x2C, body), do: Client.RequestOustPartyMember.decode(body)
   def decode(0x2F, body), do: Client.RequestMagicSkillUse.decode(body)
   def decode(0x37, body), do: Client.RequestTargetCanceld.decode(body)
+  # M17: Chat
+  def decode(0x38, body), do: Client.Say2.decode(body)
   def decode(0x3F, body), do: Client.RequestSkillList.decode(body)
   def decode(0x48, body), do: Client.ValidatePosition.decode(body)
 

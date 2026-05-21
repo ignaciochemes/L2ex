@@ -29,6 +29,8 @@ defmodule L2E.Session.PlayerSession do
   alias L2E.Inventory.Supervisor, as: InventorySupervisor
   alias L2E.Item.TemplateTable, as: ItemTemplateTable
   alias L2E.Skill.{TemplateTable, BuffInfo, Effect}
+  alias L2E.Party
+  alias L2E.Clan
 
   # Respawn delay after death (ms)
   @respawn_ms 30_000
@@ -107,7 +109,14 @@ defmodule L2E.Session.PlayerSession do
       # %{skill_id => expires_monotonic_ms}
       cooldowns: %{},
       casting: false,
-      cast_timer: nil
+      cast_timer: nil,
+      # Party / Clan state
+      party_pid: nil,
+      clan_pid: nil,
+      # Pending party invite: {party_pid, invitor_name} — awaiting our answer
+      pending_party_invite: nil,
+      # Pending clan invite: {clan_pid, clan_name} — awaiting our answer
+      pending_clan_invite: nil
     }
 
     {:ok, state}
@@ -144,6 +153,9 @@ defmodule L2E.Session.PlayerSession do
 
     hp_update = Server.StatusUpdate.hp_mp(state.char_id, new_hp, state.mp)
     send(state.conn_pid, {:send_packet, hp_update})
+
+    # Broadcast vitals update to party window
+    if state.party_pid, do: Party.vital_update(state.party_pid, state.char_id, new_hp, state.mp)
 
     if new_hp <= 0 do
       Logger.info("[PlayerSession] #{state.char_name} died")
@@ -511,16 +523,46 @@ defmodule L2E.Session.PlayerSession do
     {:noreply, %{state | buffs: new_buffs, stats: new_stats}}
   end
 
+  # M21: Another player invites this player to a party
+  def handle_info({:party_invite, party_pid, invitor_name}, state) do
+    {:noreply, %{state | pending_party_invite: {party_pid, invitor_name}}}
+  end
+
+  # M22: Another player invites this player to a clan
+  def handle_info({:clan_invite, clan_pid}, state) do
+    {:noreply, %{state | pending_clan_invite: {clan_pid, ""}}}
+  end
+
+  # Party disbanded or we were kicked — clear our party reference
+  def handle_info(:party_disbanded, state) do
+    {:noreply, %{state | party_pid: nil}}
+  end
+
   def handle_info(msg, state) do
     Logger.debug("[PlayerSession] Unexpected message: #{inspect(msg)}")
     {:noreply, state}
   end
 
-  # NPC calls this via GenServer.call to get combat stats before attacking
   @impl true
   def handle_call(:get_combat_stats, _from, state) do
     result = {:ok, state.char_id, player_combat_stats(state), state.position}
     {:reply, result, state}
+  end
+
+  # Party/Clan calls this to get the player's info for the party window
+  def handle_call(:get_party_info, _from, state) do
+    info = %{
+      char_name: state.char_name,
+      char_id: state.char_id,
+      hp: state.hp,
+      max_hp: state.max_hp,
+      mp: state.mp,
+      max_mp: state.max_mp,
+      level: state.level,
+      class_id: state.class_id
+    }
+
+    {:reply, {:ok, info}, state}
   end
 
   # -----------------------------------------------------------------------
@@ -800,6 +842,12 @@ defmodule L2E.Session.PlayerSession do
            }}
         )
 
+        # M16: If target is an NPC, open dialog on second click (or always)
+        case find_npc_pid(obj_id) do
+          nil -> :ok
+          npc_pid -> open_npc_dialog(npc_pid, obj_id, state)
+        end
+
         {:noreply, new_state}
 
       action_id == 1 ->
@@ -847,12 +895,6 @@ defmodule L2E.Session.PlayerSession do
       {:error, _reason} ->
         {:noreply, state}
     end
-  end
-
-  # ---- RequestPickUpItem (0x16) — ground item pickup (M7: no ground items yet) --
-
-  defp handle_packet(%L2E.Packet.Client.RequestPickUpItem{}, state) do
-    {:noreply, state}
   end
 
   # ---- RequestSkillList (0x3F) — client requests skill window refresh ----
@@ -905,6 +947,323 @@ defmodule L2E.Session.PlayerSession do
   end
 
   defp handle_packet(%L2E.Packet.Client.RequestMagicSkillUse{}, state), do: {:noreply, state}
+
+  # ---- RequestPickUpItem (0x16) — pick up a ground item ------------------
+
+  defp handle_packet(
+         %L2E.Packet.Client.RequestPickUpItem{object_id: obj_id},
+         %{auth_state: :in_world} = state
+       ) do
+    if state.region_pid do
+      case GenServer.call(state.region_pid, {:pickup_item, obj_id, self()}) do
+        nil ->
+          :ok
+
+        item_data ->
+          case Inventory.add_item(state.char_id, item_data.item_id, item_data.count) do
+            {:ok, change_type, {instance, template}} ->
+              change_int = change_type_to_int(change_type)
+              pkt = %Server.InventoryUpdate{changes: [{change_int, instance, template}]}
+              send(state.conn_pid, {:send_packet, pkt})
+
+            {:error, reason} ->
+              Logger.warning("[PlayerSession] Pickup add_item failed #{item_data.item_id}: #{inspect(reason)}")
+          end
+      end
+    end
+
+    {:noreply, state}
+  end
+
+  defp handle_packet(%L2E.Packet.Client.RequestPickUpItem{}, state), do: {:noreply, state}
+
+  # ---- M16: NPC Interaction via Action (0x04) + Bypass (0x21) ------------
+
+  # Re-handle Action for NPC interaction (action_id=0 on an NPC → show dialog)
+  # This is injected before the existing Action handler; the first matching
+  # clause wins, so this specific NPC-open case must live before the generic one.
+  # NOTE: We handle this inside the Action handler by checking if the target is an NPC.
+
+  defp handle_packet(
+         %L2E.Packet.Client.RequestBypassToServer{command: cmd},
+         %{auth_state: :in_world} = state
+       ) do
+    handle_bypass(cmd, state)
+  end
+
+  defp handle_packet(%L2E.Packet.Client.RequestBypassToServer{}, state), do: {:noreply, state}
+
+  defp handle_packet(
+         %L2E.Packet.Client.RequestBuyItem{npc_object_id: _npc_id, items: items},
+         %{auth_state: :in_world} = state
+       ) do
+    Enum.each(items, fn {item_id, count} ->
+      case Inventory.add_item(state.char_id, item_id, count) do
+        {:ok, change_type, {instance, template}} ->
+          change_int = change_type_to_int(change_type)
+          pkt = %Server.InventoryUpdate{changes: [{change_int, instance, template}]}
+          send(state.conn_pid, {:send_packet, pkt})
+
+        {:error, reason} ->
+          Logger.warning("[PlayerSession] Buy failed item_id=#{item_id}: #{inspect(reason)}")
+      end
+    end)
+
+    {:noreply, state}
+  end
+
+  defp handle_packet(%L2E.Packet.Client.RequestBuyItem{}, state), do: {:noreply, state}
+
+  defp handle_packet(
+         %L2E.Packet.Client.RequestSellItem{npc_object_id: _npc_id, items: items},
+         %{auth_state: :in_world} = state
+       ) do
+    Enum.each(items, fn {obj_id, _item_id, count} ->
+      case Inventory.remove_item(state.char_id, obj_id, count) do
+        {:ok, change_type, {instance, template}} ->
+          change_int = change_type_to_int(change_type)
+          pkt = %Server.InventoryUpdate{changes: [{change_int, instance, template}]}
+          send(state.conn_pid, {:send_packet, pkt})
+
+        {:error, _} ->
+          :ok
+      end
+    end)
+
+    {:noreply, state}
+  end
+
+  defp handle_packet(%L2E.Packet.Client.RequestSellItem{}, state), do: {:noreply, state}
+
+  # ---- M17: Chat (Say2 0x38) ---------------------------------------------
+
+  defp handle_packet(
+         %L2E.Packet.Client.Say2{message: msg, chat_type: chat_type, target_name: target_name},
+         %{auth_state: :in_world} = state
+       ) do
+    pkt = %Server.CreatureSay{
+      char_id: state.char_id,
+      chat_type: chat_type,
+      char_name: state.char_name,
+      message: msg
+    }
+
+    case chat_type do
+      2 ->
+        # Whisper: find target player and send directly
+        if target_name do
+          case find_session_by_name(target_name) do
+            nil ->
+              :ok
+
+            target_pid ->
+              send(target_pid, {:send_packet, pkt})
+              # Echo back to sender
+              send(state.conn_pid, {:send_packet, pkt})
+          end
+        end
+
+      3 ->
+        # Party chat: broadcast to party members
+        if state.party_pid do
+          GenServer.cast(state.party_pid, {:party_chat, state.char_id, pkt})
+        end
+
+      4 ->
+        # Clan chat: broadcast to clan members
+        if state.clan_pid do
+          GenServer.cast(state.clan_pid, {:clan_chat, state.char_id, pkt})
+        end
+
+      _ ->
+        # SAY (0), SHOUT (1), TRADE (8) etc. — broadcast to region
+        if state.region_pid do
+          GenServer.cast(state.region_pid, {:broadcast_packet, pkt})
+        end
+
+        # Always send to self
+        send(state.conn_pid, {:send_packet, pkt})
+    end
+
+    {:noreply, state}
+  end
+
+  defp handle_packet(%L2E.Packet.Client.Say2{}, state), do: {:noreply, state}
+
+  # ---- M21: Party requests -----------------------------------------------
+
+  defp handle_packet(
+         %L2E.Packet.Client.RequestJoinParty{target_name: target_name, distribution_type: dist},
+         %{auth_state: :in_world} = state
+       ) do
+    if state.char_name == target_name do
+      send(state.conn_pid, {:send_packet, %Server.SystemMessage{message_id: Server.SystemMessage.msg_cannot_invite_self()}})
+      {:noreply, state}
+    else
+      case find_session_by_name(target_name) do
+        nil ->
+          {:noreply, state}
+
+        target_pid ->
+          # Create or reuse party
+          party_pid =
+            case state.party_pid do
+              nil ->
+                {:ok, pid} = L2E.Party.Supervisor.start_party(state.char_id, self(), dist)
+                pid
+
+              pid ->
+                pid
+            end
+
+          Party.invite(party_pid, resolve_char_id(target_pid), target_pid, state.char_name)
+
+          # Tell target session about pending invite
+          send(target_pid, {:party_invite, party_pid, state.char_name})
+
+          {:noreply, %{state | party_pid: party_pid}}
+      end
+    end
+  end
+
+  defp handle_packet(%L2E.Packet.Client.RequestJoinParty{}, state), do: {:noreply, state}
+
+  defp handle_packet(
+         %L2E.Packet.Client.RequestAnswerJoinParty{response: response},
+         %{auth_state: :in_world} = state
+       ) do
+    case state.pending_party_invite do
+      nil ->
+        {:noreply, state}
+
+      {party_pid, _invitor_name} ->
+        accept = response == 1
+        Party.answer_invite(party_pid, state.char_id, self(), accept)
+
+        new_state =
+          if accept do
+            %{state | party_pid: party_pid, pending_party_invite: nil}
+          else
+            %{state | pending_party_invite: nil}
+          end
+
+        {:noreply, new_state}
+    end
+  end
+
+  defp handle_packet(%L2E.Packet.Client.RequestAnswerJoinParty{}, state), do: {:noreply, state}
+
+  defp handle_packet(
+         %L2E.Packet.Client.RequestWithDrawalParty{},
+         %{auth_state: :in_world} = state
+       ) do
+    if state.party_pid do
+      Party.leave(state.party_pid, state.char_id)
+      {:noreply, %{state | party_pid: nil}}
+    else
+      {:noreply, state}
+    end
+  end
+
+  defp handle_packet(%L2E.Packet.Client.RequestWithDrawalParty{}, state), do: {:noreply, state}
+
+  defp handle_packet(
+         %L2E.Packet.Client.RequestOustPartyMember{target_name: name},
+         %{auth_state: :in_world} = state
+       ) do
+    if state.party_pid do
+      Party.kick(state.party_pid, name)
+    end
+
+    {:noreply, state}
+  end
+
+  defp handle_packet(%L2E.Packet.Client.RequestOustPartyMember{}, state), do: {:noreply, state}
+
+  # ---- M22: Clan requests ------------------------------------------------
+
+  defp handle_packet(
+         %L2E.Packet.Client.RequestJoinPledge{target_id: target_id},
+         %{auth_state: :in_world} = state
+       ) do
+    case find_session_by_id(target_id) do
+      nil ->
+        {:noreply, state}
+
+      target_pid ->
+        # Create or reuse clan (simplified: no DB persistence for clans yet)
+        clan_pid =
+          case state.clan_pid do
+            nil ->
+              clan_id = :erlang.unique_integer([:positive, :monotonic])
+              clan_name = "#{state.char_name}'s Clan"
+              {:ok, pid} = L2E.Clan.Supervisor.start_clan(clan_id, clan_name, state.char_id, self())
+              pid
+
+            pid ->
+              pid
+          end
+
+        Clan.invite(clan_pid, target_id, target_pid)
+        send(target_pid, {:clan_invite, clan_pid})
+
+        {:noreply, %{state | clan_pid: clan_pid}}
+    end
+  end
+
+  defp handle_packet(%L2E.Packet.Client.RequestJoinPledge{}, state), do: {:noreply, state}
+
+  defp handle_packet(
+         %L2E.Packet.Client.RequestAnswerJoinPledge{response: response},
+         %{auth_state: :in_world} = state
+       ) do
+    case state.pending_clan_invite do
+      nil ->
+        {:noreply, state}
+
+      {clan_pid, _clan_name} ->
+        accept = response == 1
+        Clan.answer_invite(clan_pid, state.char_id, self(), accept)
+
+        new_state =
+          if accept do
+            %{state | clan_pid: clan_pid, pending_clan_invite: nil}
+          else
+            %{state | pending_clan_invite: nil}
+          end
+
+        {:noreply, new_state}
+    end
+  end
+
+  defp handle_packet(%L2E.Packet.Client.RequestAnswerJoinPledge{}, state), do: {:noreply, state}
+
+  defp handle_packet(
+         %L2E.Packet.Client.RequestWithdrawalPledge{},
+         %{auth_state: :in_world} = state
+       ) do
+    if state.clan_pid do
+      Clan.leave(state.clan_pid, state.char_id)
+      {:noreply, %{state | clan_pid: nil}}
+    else
+      {:noreply, state}
+    end
+  end
+
+  defp handle_packet(%L2E.Packet.Client.RequestWithdrawalPledge{}, state), do: {:noreply, state}
+
+  defp handle_packet(
+         %L2E.Packet.Client.RequestOustPledgeMember{target_name: name},
+         %{auth_state: :in_world} = state
+       ) do
+    if state.clan_pid do
+      Clan.kick(state.clan_pid, name)
+    end
+
+    {:noreply, state}
+  end
+
+  defp handle_packet(%L2E.Packet.Client.RequestOustPledgeMember{}, state), do: {:noreply, state}
 
   defp handle_packet(packet, state) do
     Logger.debug("[PlayerSession] Unhandled packet: #{inspect(packet.__struct__)}")
@@ -1088,6 +1447,124 @@ defmodule L2E.Session.PlayerSession do
       [{pid, _}] -> pid
       [] -> nil
     end
+  end
+
+  defp find_session_by_name(char_name) do
+    # Iterate registry to find a session by character name
+    # This is O(n) but acceptable for now; a name→id ETS table could speed this up.
+    match = Registry.match(L2E.Session.Registry, :_, :_)
+
+    Enum.find_value(match, fn {key, pid, _} ->
+      case key do
+        {:npc, _} -> nil
+        {:party, _} -> nil
+        {:party_member, _} -> nil
+        {:clan, _} -> nil
+        {:clan_member, _} -> nil
+        _char_id when is_integer(key) ->
+          try do
+            case GenServer.call(pid, :get_party_info, 500) do
+              {:ok, %{char_name: ^char_name}} -> pid
+              _ -> nil
+            end
+          catch
+            :exit, _ -> nil
+          end
+
+        _ -> nil
+      end
+    end)
+  end
+
+  defp find_session_by_id(char_id) do
+    case Registry.lookup(L2E.Session.Registry, char_id) do
+      [{pid, _}] -> pid
+      [] -> nil
+    end
+  end
+
+  defp resolve_char_id(pid) do
+    case GenServer.call(pid, :get_party_info, 500) do
+      {:ok, %{char_id: id}} -> id
+      _ -> 0
+    end
+  rescue
+    _ -> 0
+  end
+
+  # M16: Open NPC dialog — send an NpcHtmlMessage with a basic dialog
+  defp open_npc_dialog(npc_pid, obj_id, state) do
+    npc_info = L2E.NPC.Instance.get_info(npc_pid)
+    template = npc_info[:template]
+    npc_name = if template, do: template.name, else: "NPC"
+
+    # Basic dialog HTML — real dialogs would come from data/html/ files
+    html = """
+    <html><body>
+    <title>#{npc_name}</title>
+    <br>
+    Hello, #{state.char_name}.<br>
+    How can I help you?<br>
+    <a action="bypass -h npc_#{obj_id}_Trade">Trade</a><br>
+    <a action="bypass -h npc_#{obj_id}_Quest">Quests</a><br>
+    </body></html>
+    """
+
+    send(state.conn_pid, {:send_packet, %Server.NpcHtmlMessage{npc_object_id: obj_id, html: html}})
+  end
+
+  # M16: Handle bypass commands from NPC dialogs
+  defp handle_bypass(cmd, state) do
+    cond do
+      String.starts_with?(cmd, "npc_") ->
+        # e.g. "npc_12345_Trade"
+        case String.split(cmd, "_", parts: 3) do
+          ["npc", npc_id_str, action] ->
+            npc_id = String.to_integer(npc_id_str)
+            handle_npc_bypass(npc_id, action, state)
+
+          _ ->
+            {:noreply, state}
+        end
+
+      true ->
+        {:noreply, state}
+    end
+  end
+
+  defp handle_npc_bypass(npc_id, "Trade", state) do
+    npc_pid = find_npc_pid(npc_id)
+    npc_info = if npc_pid, do: L2E.NPC.Instance.get_info(npc_pid), else: %{}
+    template = npc_info[:template]
+
+    buy_list_items =
+      case template do
+        nil -> []
+        t -> build_buy_list(t.npc_id)
+      end
+
+    adena_count = Inventory.get_adena_count(state.char_id)
+
+    send(state.conn_pid, {:send_packet, %Server.BuyList{
+      npc_object_id: npc_id,
+      my_adena: adena_count,
+      items: buy_list_items
+    }})
+
+    {:noreply, state}
+  end
+
+  defp handle_npc_bypass(_npc_id, _action, state), do: {:noreply, state}
+
+  # Build a minimal buy list for a given NPC type.
+  # In a full implementation this would read from data/merchants/ XML files.
+  defp build_buy_list(_npc_id) do
+    # Placeholder: return a few basic items for any merchant
+    [
+      %{item_id: 57, price: 0},       # Adena (dummy)
+      %{item_id: 1835, price: 60},    # Health Potion
+      %{item_id: 1831, price: 40}     # Mana Potion
+    ]
   end
 
   defp cancel_timer(nil), do: :ok

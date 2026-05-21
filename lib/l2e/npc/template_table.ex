@@ -73,7 +73,7 @@ defmodule L2E.NPC.TemplateTable do
           content
           |> parse()
           |> xpath(
-            ~x"//npc"l,
+            ~x"/list/npc"l,
             id: ~x"./@id"i,
             level: ~x"./@level"i,
             name: ~x"./@name"s,
@@ -90,9 +90,9 @@ defmodule L2E.NPC.TemplateTable do
             m_def: ~x"./stats/defence/@magical"f,
             run_speed: ~x"./stats/speed/run/@ground"f,
             walk_speed: ~x"./stats/speed/walk/@ground"f,
-            exp: ~x"./acquire/@exp"i,
-            sp: ~x"./acquire/@sp"i,
-            aggro_range: ~x"./ai/@aggroRange"i,
+            exp: ~x"./acquire/@exp"s,
+            sp: ~x"./acquire/@sp"s,
+            aggro_range: ~x"./ai/@aggroRange"s,
             is_aggressive: ~x"./ai/@isAggressive"s
           )
           |> Enum.map(&build_template/1)
@@ -127,13 +127,16 @@ defmodule L2E.NPC.TemplateTable do
       walk_speed: trunc(row.walk_speed || 60),
       max_hp: trunc(row.hp || 100),
       max_mp: trunc(row.mp || 0),
-      aggro_range: row.aggro_range || 0,
+      aggro_range: parse_int(row.aggro_range, 0),
       is_aggressive: row.is_aggressive == "true",
       leash_range: 500,
       respawn_ms: 30_000,
       attack_range: trunc(row.atk_range || 40),
-      exp_reward: row.exp || 0,
-      sp_reward: row.sp || 0
+      exp_reward: parse_int(row.exp, 0),
+      sp_reward: parse_int(row.sp, 0)
     }
   end
+
+  defp parse_int("", default), do: default
+  defp parse_int(s, _), do: String.to_integer(s)
 end

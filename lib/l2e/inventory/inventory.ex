@@ -73,6 +73,19 @@ defmodule L2E.Inventory do
     GenServer.call(via_tuple(char_id), :get_equip_bonuses)
   end
 
+  @doc "Returns the amount of adena (item_id 57) in the inventory."
+  @spec get_adena_count(pos_integer()) :: non_neg_integer()
+  def get_adena_count(char_id) do
+    GenServer.call(via_tuple(char_id), :get_adena_count)
+  end
+
+  @doc "Removes `count` of the item instance `item_instance_id` from inventory."
+  @spec remove_item(pos_integer(), pos_integer(), pos_integer()) ::
+          {:ok, :modified | :removed, {Instance.t(), Template.t()}} | {:error, term()}
+  def remove_item(char_id, item_instance_id, count) do
+    GenServer.call(via_tuple(char_id), {:remove_item, item_instance_id, count})
+  end
+
   # -----------------------------------------------------------------------
   # GenServer callbacks
   # -----------------------------------------------------------------------
@@ -131,6 +144,50 @@ defmodule L2E.Inventory do
 
   def handle_call(:get_equip_bonuses, _from, state) do
     {:reply, state.equip_bonuses, state}
+  end
+
+  def handle_call(:get_adena_count, _from, state) do
+    adena_id = 57
+    count = Enum.find_value(state.items, 0, fn {_, inst} ->
+      if inst.item_id == adena_id, do: inst.count || 0, else: nil
+    end)
+    {:reply, count, state}
+  end
+
+  def handle_call({:remove_item, item_instance_id, count}, _from, state) do
+    case Map.get(state.items, item_instance_id) do
+      nil ->
+        {:reply, {:error, :not_found}, state}
+
+      instance ->
+        template = TemplateTable.get(instance.item_id)
+
+        cond do
+          is_nil(template) ->
+            {:reply, {:error, :no_template}, state}
+
+          # Stackable: reduce count or delete if depleted
+          template.stackable ->
+            new_count = (instance.count || 1) - count
+
+            if new_count <= 0 do
+              Repo.delete_all(from(i in Item, where: i.id == ^item_instance_id))
+              new_items = Map.delete(state.items, item_instance_id)
+              {:reply, {:ok, :removed, {%{instance | count: 0}, template}}, %{state | items: new_items}}
+            else
+              Repo.update_all(from(i in Item, where: i.id == ^item_instance_id), set: [count: new_count])
+              updated = %{instance | count: new_count}
+              new_items = Map.put(state.items, item_instance_id, updated)
+              {:reply, {:ok, :modified, {updated, template}}, %{state | items: new_items}}
+            end
+
+          # Non-stackable: remove single instance
+          true ->
+            Repo.delete_all(from(i in Item, where: i.id == ^item_instance_id))
+            new_items = Map.delete(state.items, item_instance_id)
+            {:reply, {:ok, :removed, {instance, template}}, %{state | items: new_items}}
+        end
+    end
   end
 
   # -----------------------------------------------------------------------

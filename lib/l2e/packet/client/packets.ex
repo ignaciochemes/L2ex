@@ -370,3 +370,332 @@ defmodule L2E.Packet.Client.RequestSkillList do
   @impl L2E.Packet.Decodable
   def decode(_body), do: {:ok, %__MODULE__{}}
 end
+
+# ── M16: NPC Interaction ──────────────────────────────────────────────────────
+
+defmodule L2E.Packet.Client.RequestBypassToServer do
+  @moduledoc """
+  Opcode 0x21 — client-side NPC dialog action (bypass command).
+
+  Sent when the player clicks a link inside an NPC HTML dialog.
+  The bypass string is the "href" value from the HTML, e.g.
+  "_bbshome" or "npc_%objectId%_Buy".
+
+  Body (RequestBypassToServer.java): bypass_string(string)
+
+  Reference: ClientPackets.java REQUEST_BYPASS_TO_SERVER(0x21)
+  """
+  @behaviour L2E.Packet.Decodable
+
+  defstruct [:command]
+  @type t :: %__MODULE__{}
+
+  @impl L2E.Packet.Decodable
+  def decode(body) do
+    case decode_utf16le(body) do
+      {cmd, _rest} -> {:ok, %__MODULE__{command: cmd}}
+      _ -> {:error, :malformed}
+    end
+  end
+
+  defp decode_utf16le(bin), do: do_utf16(bin, [])
+  defp do_utf16(<<0, 0, rest::binary>>, acc), do: {acc |> Enum.reverse() |> Enum.map_join(&<<&1::utf8>>), rest}
+  defp do_utf16(<<cp::little-16, rest::binary>>, acc), do: do_utf16(rest, [cp | acc])
+  defp do_utf16(_, _), do: :error
+end
+
+defmodule L2E.Packet.Client.RequestBuyItem do
+  @moduledoc """
+  Opcode 0x1F — client buys items from a merchant NPC.
+
+  Body (RequestBuyItem.java):
+    npc_object_id(32) count(16) + per item: item_id(32) count(64)
+
+  Reference: ClientPackets.java REQUEST_BUY_ITEM(0x1F)
+  """
+  @behaviour L2E.Packet.Decodable
+
+  defstruct [:npc_object_id, items: []]
+  @type t :: %__MODULE__{}
+
+  @impl L2E.Packet.Decodable
+  def decode(<<npc_id::little-32, count::little-16, rest::binary>>) do
+    items = parse_items(rest, count, [])
+    {:ok, %__MODULE__{npc_object_id: npc_id, items: items}}
+  end
+
+  def decode(_), do: {:error, :malformed}
+
+  defp parse_items(_, 0, acc), do: Enum.reverse(acc)
+  defp parse_items(<<item_id::little-32, count::little-64, rest::binary>>, n, acc) do
+    parse_items(rest, n - 1, [{item_id, count} | acc])
+  end
+  defp parse_items(_, _, acc), do: Enum.reverse(acc)
+end
+
+defmodule L2E.Packet.Client.RequestSellItem do
+  @moduledoc """
+  Opcode 0x1E — client sells items to a merchant NPC.
+
+  Body (RequestSellItem.java):
+    npc_object_id(32) count(16) + per item: obj_id(32) item_id(32) count(64)
+
+  Reference: ClientPackets.java REQUEST_SELL_ITEM(0x1E)
+  """
+  @behaviour L2E.Packet.Decodable
+
+  defstruct [:npc_object_id, items: []]
+  @type t :: %__MODULE__{}
+
+  @impl L2E.Packet.Decodable
+  def decode(<<npc_id::little-32, count::little-16, rest::binary>>) do
+    items = parse_items(rest, count, [])
+    {:ok, %__MODULE__{npc_object_id: npc_id, items: items}}
+  end
+
+  def decode(_), do: {:error, :malformed}
+
+  defp parse_items(_, 0, acc), do: Enum.reverse(acc)
+  defp parse_items(<<obj_id::little-32, item_id::little-32, count::little-64, rest::binary>>, n, acc) do
+    parse_items(rest, n - 1, [{obj_id, item_id, count} | acc])
+  end
+  defp parse_items(_, _, acc), do: Enum.reverse(acc)
+end
+
+# ── M17: Chat ─────────────────────────────────────────────────────────────────
+
+defmodule L2E.Packet.Client.Say2 do
+  @moduledoc """
+  Opcode 0x38 — player sends a chat message.
+
+  chat_type:
+    0 = SAY (normal, nearby)    1 = SHOUT (wider area)
+    2 = TELL (whisper)          3 = PARTY
+    4 = CLAN                    8 = TRADE
+    12 = HERO                  17 = ALL_WORLD
+
+  Body (Say2.java): text(string) chat_type(32) [target_name(string) if whisper]
+
+  Reference: ClientPackets.java SAY2(0x38)
+  """
+  @behaviour L2E.Packet.Decodable
+
+  defstruct [:message, :chat_type, :target_name]
+  @type t :: %__MODULE__{}
+
+  @impl L2E.Packet.Decodable
+  def decode(body) do
+    case decode_utf16le(body) do
+      {message, <<chat_type::little-32, rest::binary>>} ->
+        target =
+          if chat_type == 2 do
+            case decode_utf16le(rest) do
+              {name, _} -> name
+              _ -> nil
+            end
+          else
+            nil
+          end
+
+        {:ok, %__MODULE__{message: message, chat_type: chat_type, target_name: target}}
+
+      _ ->
+        {:error, :malformed}
+    end
+  end
+
+  defp decode_utf16le(bin), do: do_utf16(bin, [])
+  defp do_utf16(<<0, 0, rest::binary>>, acc), do: {acc |> Enum.reverse() |> Enum.map_join(&<<&1::utf8>>), rest}
+  defp do_utf16(<<cp::little-16, rest::binary>>, acc), do: do_utf16(rest, [cp | acc])
+  defp do_utf16(_, _), do: :error
+end
+
+# ── M21: Party ────────────────────────────────────────────────────────────────
+
+defmodule L2E.Packet.Client.RequestJoinParty do
+  @moduledoc """
+  Opcode 0x29 — player invites another player to a party.
+
+  Body (RequestJoinParty.java): target_name(string) distribution_type(32)
+
+  distribution_type:
+    1 = RANDOM    2 = RANDOM_SPOIL    3 = BY_TURN
+    4 = BY_TURN_SPOIL    5 = FINDERS_KEEPERS
+
+  Reference: ClientPackets.java REQUEST_JOIN_PARTY(0x29)
+  """
+  @behaviour L2E.Packet.Decodable
+
+  defstruct [:target_name, :distribution_type]
+  @type t :: %__MODULE__{}
+
+  @impl L2E.Packet.Decodable
+  def decode(body) do
+    case decode_utf16le(body) do
+      {name, <<dist::little-32, _::binary>>} ->
+        {:ok, %__MODULE__{target_name: name, distribution_type: dist}}
+      {name, <<>>} ->
+        {:ok, %__MODULE__{target_name: name, distribution_type: 1}}
+      _ ->
+        {:error, :malformed}
+    end
+  end
+
+  defp decode_utf16le(bin), do: do_utf16(bin, [])
+  defp do_utf16(<<0, 0, rest::binary>>, acc), do: {acc |> Enum.reverse() |> Enum.map_join(&<<&1::utf8>>), rest}
+  defp do_utf16(<<cp::little-16, rest::binary>>, acc), do: do_utf16(rest, [cp | acc])
+  defp do_utf16(_, _), do: :error
+end
+
+defmodule L2E.Packet.Client.RequestAnswerJoinParty do
+  @moduledoc """
+  Opcode 0x2A — player accepts or refuses a party invitation.
+
+  Body (RequestAnswerJoinParty.java): response(32) — 1=accept, 0=refuse
+
+  Reference: ClientPackets.java REQUEST_ANSWER_JOIN_PARTY(0x2A)
+  """
+  @behaviour L2E.Packet.Decodable
+
+  defstruct [:response]
+  @type t :: %__MODULE__{}
+
+  @impl L2E.Packet.Decodable
+  def decode(<<response::little-32, _::binary>>) do
+    {:ok, %__MODULE__{response: response}}
+  end
+
+  def decode(_), do: {:error, :malformed}
+end
+
+defmodule L2E.Packet.Client.RequestWithDrawalParty do
+  @moduledoc """
+  Opcode 0x2B — player leaves the party voluntarily.
+
+  Body: empty.
+
+  Reference: ClientPackets.java REQUEST_WITH_DRAWAL_PARTY(0x2B)
+  """
+  @behaviour L2E.Packet.Decodable
+
+  defstruct []
+  @type t :: %__MODULE__{}
+
+  @impl L2E.Packet.Decodable
+  def decode(_), do: {:ok, %__MODULE__{}}
+end
+
+defmodule L2E.Packet.Client.RequestOustPartyMember do
+  @moduledoc """
+  Opcode 0x2C — party leader kicks a member.
+
+  Body (RequestOustPartyMember.java): target_name(string)
+
+  Reference: ClientPackets.java REQUEST_OUST_PARTY_MEMBER(0x2C)
+  """
+  @behaviour L2E.Packet.Decodable
+
+  defstruct [:target_name]
+  @type t :: %__MODULE__{}
+
+  @impl L2E.Packet.Decodable
+  def decode(body) do
+    case decode_utf16le(body) do
+      {name, _} -> {:ok, %__MODULE__{target_name: name}}
+      _ -> {:error, :malformed}
+    end
+  end
+
+  defp decode_utf16le(bin), do: do_utf16(bin, [])
+  defp do_utf16(<<0, 0, rest::binary>>, acc), do: {acc |> Enum.reverse() |> Enum.map_join(&<<&1::utf8>>), rest}
+  defp do_utf16(<<cp::little-16, rest::binary>>, acc), do: do_utf16(rest, [cp | acc])
+  defp do_utf16(_, _), do: :error
+end
+
+# ── M22: Clans ────────────────────────────────────────────────────────────────
+
+defmodule L2E.Packet.Client.RequestJoinPledge do
+  @moduledoc """
+  Opcode 0x24 — clan leader invites a player to the clan.
+
+  Body (RequestJoinPledge.java): target_id(32) pledge_type(32)
+
+  Reference: ClientPackets.java REQUEST_JOIN_PLEDGE(0x24)
+  """
+  @behaviour L2E.Packet.Decodable
+
+  defstruct [:target_id, :pledge_type]
+  @type t :: %__MODULE__{}
+
+  @impl L2E.Packet.Decodable
+  def decode(<<target_id::little-32, pledge_type::little-32, _::binary>>) do
+    {:ok, %__MODULE__{target_id: target_id, pledge_type: pledge_type}}
+  end
+
+  def decode(_), do: {:error, :malformed}
+end
+
+defmodule L2E.Packet.Client.RequestAnswerJoinPledge do
+  @moduledoc """
+  Opcode 0x25 — player accepts or refuses a clan invitation.
+
+  Body (RequestAnswerJoinPledge.java): response(32) — 1=accept, 0=refuse
+
+  Reference: ClientPackets.java REQUEST_ANSWER_JOIN_PLEDGE(0x25)
+  """
+  @behaviour L2E.Packet.Decodable
+
+  defstruct [:response]
+  @type t :: %__MODULE__{}
+
+  @impl L2E.Packet.Decodable
+  def decode(<<response::little-32, _::binary>>) do
+    {:ok, %__MODULE__{response: response}}
+  end
+
+  def decode(_), do: {:error, :malformed}
+end
+
+defmodule L2E.Packet.Client.RequestWithdrawalPledge do
+  @moduledoc """
+  Opcode 0x26 — player leaves the clan voluntarily.
+
+  Body: empty.
+
+  Reference: ClientPackets.java REQUEST_WITHDRAWAL_PLEDGE(0x26)
+  """
+  @behaviour L2E.Packet.Decodable
+
+  defstruct []
+  @type t :: %__MODULE__{}
+
+  @impl L2E.Packet.Decodable
+  def decode(_), do: {:ok, %__MODULE__{}}
+end
+
+defmodule L2E.Packet.Client.RequestOustPledgeMember do
+  @moduledoc """
+  Opcode 0x27 — clan leader kicks a member.
+
+  Body (RequestOustPledgeMember.java): target_name(string)
+
+  Reference: ClientPackets.java REQUEST_OUST_PLEDGE_MEMBER(0x27)
+  """
+  @behaviour L2E.Packet.Decodable
+
+  defstruct [:target_name]
+  @type t :: %__MODULE__{}
+
+  @impl L2E.Packet.Decodable
+  def decode(body) do
+    case decode_utf16le(body) do
+      {name, _} -> {:ok, %__MODULE__{target_name: name}}
+      _ -> {:error, :malformed}
+    end
+  end
+
+  defp decode_utf16le(bin), do: do_utf16(bin, [])
+  defp do_utf16(<<0, 0, rest::binary>>, acc), do: {acc |> Enum.reverse() |> Enum.map_join(&<<&1::utf8>>), rest}
+  defp do_utf16(<<cp::little-16, rest::binary>>, acc), do: do_utf16(rest, [cp | acc])
+  defp do_utf16(_, _), do: :error
+end
