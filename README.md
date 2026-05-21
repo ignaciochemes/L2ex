@@ -134,14 +134,14 @@ graph TD
         P2[PlayerSession :5678<br/>state: position, HP, stats]
         N1[NPC.Instance :9001<br/>state: idle, hp=100%]
         N2[NPC.Instance :9002<br/>state: combat, target=P1]
-        R1[Region {5,3}<br/>entities: P1, P2, N1, N2]
+        R1["Region 5,3<br/>entities: P1, P2, N1, N2"]
     end
 
-    P1 -- {:take_damage, 45} --> P2
-    P2 -- {:auto_attack_tick} --> N2
-    N2 -- {:broadcast, :player_moved, ...} --> R1
-    R1 -- {:broadcast, :player_moved, info} --> P1
-    R1 -- {:broadcast, :player_moved, info} --> P2
+    P1 -- "take_damage: 45" --> P2
+    P2 -- "auto_attack_tick" --> N2
+    N2 -- "broadcast: player_moved" --> R1
+    R1 -- "broadcast: player_moved" --> P1
+    R1 -- "broadcast: player_moved" --> P2
 ```
 
 **Key property**: if `NPC.Instance :9002` crashes (e.g. a bug in attack calculation), the `DynamicSupervisor` logs the error and removes it from the world. `P1`, `P2`, `N1`, and `R1` continue operating normally.
@@ -229,14 +229,14 @@ sequenceDiagram
 
     Player->>Player: AttackRequest received
     Player->>Player: start_auto_attack()
-    Player->>Player: schedule_attack() → Process.send_after(:auto_attack_tick, atk_ms)
-    Player->>NPC: get_stats (GenServer.call)
-    Player->>Player: Combat.Resolver.resolve_hit(my_stats, npc_stats)
-    Player->>Region: broadcast_packet(%Attack{...})
-    Player->>NPC: take_damage(damage, self())
-    NPC->>NPC: hp -= damage; broadcast StatusUpdate
-    NPC->>Player: cast {:receive_xp_sp, exp, sp}  (on death)
-    Player->>Player: level_up?  →  SocialAction + UserInfo
+    Player->>Player: schedule_attack via Process.send_after atk_ms
+    Player->>NPC: get_stats via GenServer.call
+    Player->>Player: Combat.Resolver.resolve_hit
+    Player->>Region: broadcast Attack packet
+    Player->>NPC: take_damage
+    NPC->>NPC: hp -= damage then broadcast StatusUpdate
+    NPC->>Player: cast receive_xp_sp on death
+    Player->>Player: level_up check -> SocialAction + UserInfo
 ```
 
 ---
