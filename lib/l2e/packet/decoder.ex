@@ -44,7 +44,11 @@ defmodule L2E.Packet.Decoder do
   def decode(0x0C, body), do: Client.CharacterDelete.decode(body)
   def decode(0x0D, body), do: Client.CharacterSelect.decode(body)
   def decode(0x0E, body), do: Client.NewCharacter.decode(body)
-  def decode(0x16, body), do: Client.RequestPickUpItem.decode(body)
+  # M27: Trade
+  def decode(0x15, body), do: Client.TradeRequest.decode(body)
+  def decode(0x16, body), do: Client.AddTradeItem.decode(body)
+  def decode(0x17, body), do: Client.TradeDone.decode(body)
+  def decode(0x44, body), do: Client.AnswerTradeRequest.decode(body)
   def decode(0x19, body), do: Client.UseItem.decode(body)
   # M16: NPC interaction
   def decode(0x1E, body), do: Client.RequestSellItem.decode(body)
@@ -61,11 +65,16 @@ defmodule L2E.Packet.Decoder do
   def decode(0x2B, body), do: Client.RequestWithDrawalParty.decode(body)
   def decode(0x2C, body), do: Client.RequestOustPartyMember.decode(body)
   def decode(0x2F, body), do: Client.RequestMagicSkillUse.decode(body)
+  def decode(0x32, body), do: Client.RequestWarehouseWithdraw.decode(body)
+  def decode(0x33, body), do: Client.RequestWarehouseDeposit.decode(body)
   def decode(0x37, body), do: Client.RequestTargetCanceld.decode(body)
   # M17: Chat
   def decode(0x38, body), do: Client.Say2.decode(body)
   def decode(0x3F, body), do: Client.RequestSkillList.decode(body)
   def decode(0x48, body), do: Client.ValidatePosition.decode(body)
+
+  # M28: Enchant
+  def decode(0x58, body), do: Client.RequestEnchantItem.decode(body)
 
   # ── Extended two-byte opcode space (0xD0 prefix) ────────────────────────────
   # Body starts with a little-endian 16-bit sub-opcode, then the real payload.

@@ -16,6 +16,10 @@ defmodule L2E.Application do
       L2E.NPC.TemplateTable,
       L2E.Item.TemplateTable,
       L2E.Skill.TemplateTable,
+      L2E.Data.BuyListTable,
+      L2E.Data.TeleporterTable,
+      L2E.Data.EnchantData,
+      L2E.Zone.ZoneTable,
 
       # Registry for looking up PlayerSession pids by char_id
       {Registry, keys: :unique, name: L2E.Session.Registry},
@@ -38,6 +42,12 @@ defmodule L2E.Application do
 
       # Clan supervisor — manages active clan processes
       L2E.Clan.Supervisor,
+
+      # Warehouse supervisor — manages per-character warehouse processes
+      L2E.Warehouse.Supervisor,
+
+      # Trade supervisor — manages ephemeral player-to-player trade processes
+      L2E.Trade.Supervisor,
 
       # Login Server — must start before game server so AccountStore is ready
       L2E.LoginServer.Supervisor,

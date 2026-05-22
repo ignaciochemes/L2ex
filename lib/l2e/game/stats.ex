@@ -30,9 +30,10 @@ defmodule L2E.Game.Stats do
       cast_speed: template.cast_speed,
       run_speed: template.run_speed,
       walk_speed: template.walk_speed,
-      accuracy: accuracy(template),
-      evasion: evasion(template),
+      accuracy: accuracy(template, level),
+      evasion: evasion(template, level),
       crit_rate: crit_rate(template),
+      shield_rate: shield_rate(template),
       str: template.base_str,
       dex: template.base_dex,
       con: template.base_con,
@@ -97,14 +98,51 @@ defmodule L2E.Game.Stats do
   # Accuracy / Evasion / Critical
   # -----------------------------------------------------------------------
 
+  # L2 formula: accuracy = sqrt(DEX) * 6 + level
+  @spec accuracy(map(), pos_integer()) :: non_neg_integer()
+  def accuracy(%{base_dex: dex}, level), do: round(:math.sqrt(dex) * 6 + level)
+
+  # Backward-compat 1-arity (level 1 default, used in Stats.compute/2 below)
   @spec accuracy(map()) :: non_neg_integer()
-  def accuracy(%{base_dex: dex}), do: round(dex * 0.5)
+  def accuracy(%{base_dex: dex}), do: round(:math.sqrt(dex) * 6)
+
+  # L2 formula: evasion = sqrt(DEX) * 4 + level
+  @spec evasion(map(), pos_integer()) :: non_neg_integer()
+  def evasion(%{base_dex: dex}, level), do: round(:math.sqrt(dex) * 4 + level)
 
   @spec evasion(map()) :: non_neg_integer()
-  def evasion(%{base_dex: dex}), do: round(dex * 0.5)
+  def evasion(%{base_dex: dex}), do: round(:math.sqrt(dex) * 4)
 
+  # L2 formula: crit_rate = sqrt(DEX) * 3 (out of 1000, max 500 = 50%)
   @spec crit_rate(map()) :: non_neg_integer()
-  def crit_rate(%{base_crit: base, base_dex: dex}), do: round(base + dex * 0.1)
+  def crit_rate(%{base_crit: base, base_dex: dex}) do
+    min(round(base + :math.sqrt(dex) * 3), 500)
+  end
+
+  # Shield defense rate (base from template)
+  @spec shield_rate(map()) :: non_neg_integer()
+  def shield_rate(%{base_shield_rate: r}), do: r
+  def shield_rate(_), do: 0
+
+  # -----------------------------------------------------------------------
+  # Regeneration rates (per 3-second tick)
+  # -----------------------------------------------------------------------
+
+  @doc "HP regenerated per 3-second regen tick. L2 formula: CON * 1.5 + base_regen_hp."
+  @spec hp_regen(map(), pos_integer()) :: float()
+  def hp_regen(%{base_con: con, base_hp: base_hp}, level) do
+    base_regen = base_hp * 0.005
+    con_bonus = con * 1.5
+    (base_regen + con_bonus) * (1.0 + level * 0.01)
+  end
+
+  @doc "MP regenerated per 3-second regen tick. L2 formula: MEN * 0.3 + base_regen_mp."
+  @spec mp_regen(map(), pos_integer()) :: float()
+  def mp_regen(%{base_men: men, base_mp: base_mp}, level) do
+    base_regen = base_mp * 0.004
+    men_bonus = men * 0.3
+    (base_regen + men_bonus) * (1.0 + level * 0.005)
+  end
 
   # -----------------------------------------------------------------------
   # Stat modifiers

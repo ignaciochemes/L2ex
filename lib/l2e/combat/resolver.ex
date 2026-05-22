@@ -1,35 +1,95 @@
 defmodule L2E.Combat.Resolver do
   @moduledoc """
-  Pure module for resolving physical combat hits.
+  Pure module for resolving physical and magical combat hits.
 
-  Implements a simplified version of the L2 Interlude physical formula:
-    base_damage = P.Atk * 70 / P.Def
-    accuracy check → :miss if attacker accuracy < defender evasion roll
-    crit check → multiplier × 2 if successful
+  Implements L2 Interlude combat math from Formulas.java:
 
-  No side effects — all randomness is injected via :rand so tests can seed it.
+  Physical hit:
+    chance = clamp(80 + 2*(accuracy - evasion), 20, 98) percent
+    damage = 76 * P.Atk * proximity_bonus / P.Def  (with ±10% variance)
+    crit:    rate out of 1000, capped at 500; doubles damage (×2)
 
-  Reference: Formulas.java (calcPhysDam, calcHit, calcCrit)
+  Magical hit:
+    damage = 91 * M.Atk / M.Def * skill_power_factor
+
+  Shield block:
+    roll 1..100 vs shield_rate → :failed | :blocked | :perfect_block
+    :blocked     → P.Def += shield_def
+    :perfect_block → 1 damage
+
+  No side effects — randomness via :rand so tests can seed it.
   """
+
+  # -----------------------------------------------------------------------
+  # Physical hit (auto-attack or physical skill)
+  # -----------------------------------------------------------------------
 
   @doc """
-  Resolves a single physical hit.
+  Resolves a physical auto-attack.
 
-  Returns `{damage, result}` where result is `:hit | :miss | :crit`.
-  damage is 0 on a miss.
+  `attacker` and `defender` are stat maps:
+    `%{p_atk, p_def, accuracy, evasion, crit_rate, shield_def, shield_rate}`
+  Extra optional keys: `behind: bool, side: bool` for proximity bonus.
+
+  Returns `{damage, result}` where result is `:hit | :miss | :crit | :blocked | :perfect_block`.
   """
-  @spec resolve_hit(map(), map()) :: {non_neg_integer(), :hit | :miss | :crit}
+  @spec resolve_hit(map(), map()) ::
+          {non_neg_integer(), :hit | :miss | :crit | :blocked | :perfect_block}
   def resolve_hit(attacker, defender) do
     if miss?(attacker, defender) do
       {0, :miss}
     else
-      base = base_damage(attacker.p_atk, defender.p_def)
+      case shield_check(defender) do
+        :perfect_block ->
+          {1, :perfect_block}
 
-      if crit?(attacker) do
-        {round(base * 2.0), :crit}
-      else
-        {round(base), :hit}
+        shield ->
+          effective_pdef =
+            defender.p_def + if shield == :blocked, do: Map.get(defender, :shield_def, 0), else: 0
+
+          proximity = proximity_bonus(attacker)
+          base = phys_damage(attacker.p_atk, effective_pdef, proximity)
+
+          if crit?(attacker) do
+            {round(base * 2.0), :crit}
+          else
+            {max(1, round(base)), :hit}
+          end
       end
+    end
+  end
+
+  @doc """
+  Resolves a physical skill hit with a flat power bonus added to P.Atk.
+  """
+  @spec resolve_skill_hit(map(), map(), number()) ::
+          {non_neg_integer(), :hit | :miss | :crit | :blocked | :perfect_block}
+  def resolve_skill_hit(attacker, defender, power) do
+    effective_attacker = %{attacker | p_atk: attacker.p_atk + power}
+    resolve_hit(effective_attacker, defender)
+  end
+
+  # -----------------------------------------------------------------------
+  # Magical hit
+  # -----------------------------------------------------------------------
+
+  @doc """
+  Resolves a magical skill hit.
+
+  `power` is the skill's magic power (from skill template).
+  Returns `{damage, :hit | :mcrit}`.
+  Magic never misses in L2 (no evasion check).
+  """
+  @spec resolve_magic_hit(map(), map(), number()) :: {non_neg_integer(), :hit | :mcrit}
+  def resolve_magic_hit(attacker, defender, power) do
+    m_def = max(1, Map.get(defender, :m_def, 20))
+    base = 91.0 * attacker.m_atk * (1.0 + power / 100.0) / m_def
+    variance = 0.90 + :rand.uniform() * 0.20
+
+    if magic_crit?(attacker) do
+      {max(1, round(base * variance * 3.0)), :mcrit}
+    else
+      {max(1, round(base * variance)), :hit}
     end
   end
 
@@ -37,26 +97,54 @@ defmodule L2E.Combat.Resolver do
   # Private
   # -----------------------------------------------------------------------
 
-  # L2 formula: P.Atk * 70 / P.Def with ±15% random variance
-  defp base_damage(p_atk, p_def) when p_def > 0 do
-    variance = 0.85 + :rand.uniform() * 0.30
-    p_atk * 70.0 / p_def * variance
-  end
-
-  defp base_damage(p_atk, _p_def), do: p_atk * 0.7
-
-  # Miss check: compare accuracy vs evasion with a random roll
-  # L2 formula: P(hit) = (accuracy - evasion + 85) / 100 clamped to [10%, 95%]
+  # L2 hit-miss formula: chance = clamp(80 + 2*(accuracy - evasion), 20, 98) %
+  # Internally uses per-mille: clamp(800 + 20*(acc-eva), 200, 980) / 1000
   defp miss?(attacker, defender) do
-    hit_chance = clamp((attacker.accuracy - defender.evasion + 85) / 100.0, 0.10, 0.95)
-    :rand.uniform() > hit_chance
+    diff = Map.get(attacker, :accuracy, 0) - Map.get(defender, :evasion, 0)
+    chance = clamp(800 + 20 * diff, 200, 980)
+    :rand.uniform(1000) > chance
   end
 
-  # Crit check: crit_rate is out of 1000 in L2 (max 500)
-  # Simplified: crit_rate / 100 gives a 0–5% base chance
+  # Physical damage: 76 * P.Atk * proximity / P.Def with ±10% variance
+  defp phys_damage(p_atk, p_def, proximity) when p_def > 0 do
+    variance = 0.90 + :rand.uniform() * 0.20
+    76.0 * p_atk * proximity / p_def * variance
+  end
+
+  defp phys_damage(p_atk, _p_def, proximity), do: p_atk * proximity * 0.8
+
+  # Behind: +20%, side: +10%, front: 0%
+  defp proximity_bonus(%{behind: true}), do: 1.2
+  defp proximity_bonus(%{side: true}), do: 1.1
+  defp proximity_bonus(_), do: 1.0
+
+  # Crit check: crit_rate is out of 1000, capped at 500
   defp crit?(attacker) do
-    crit_chance = min(attacker.crit_rate / 100.0, 0.33)
-    :rand.uniform() < crit_chance
+    rate = min(Map.get(attacker, :crit_rate, 40), 500)
+    :rand.uniform(1000) <= rate
+  end
+
+  # Magic crit: flat 3% base chance, modified by WIT (1% per 10 WIT above 20)
+  defp magic_crit?(attacker) do
+    wit = Map.get(attacker, :wit, 20)
+    rate = round(30 + max(0, wit - 20) * 1.0)
+    :rand.uniform(1000) <= min(rate, 100)
+  end
+
+  # Shield check: returns :failed | :blocked | :perfect_block
+  defp shield_check(defender) do
+    shield_rate = Map.get(defender, :shield_rate, 0)
+
+    cond do
+      shield_rate <= 0 ->
+        :failed
+
+      :rand.uniform(100) <= shield_rate ->
+        if :rand.uniform(100) <= 10, do: :perfect_block, else: :blocked
+
+      true ->
+        :failed
+    end
   end
 
   defp clamp(v, lo, hi), do: max(lo, min(hi, v))

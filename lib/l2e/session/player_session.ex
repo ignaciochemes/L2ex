@@ -31,6 +31,12 @@ defmodule L2E.Session.PlayerSession do
   alias L2E.Skill.{TemplateTable, BuffInfo, Effect}
   alias L2E.Party
   alias L2E.Clan
+  alias L2E.Data.BuyListTable
+  alias L2E.Data.TeleporterTable
+  alias L2E.Warehouse
+  alias L2E.Trade
+  alias L2E.Data.EnchantData
+  alias L2E.Zone.ZoneTable
 
   # Respawn delay after death (ms)
   @respawn_ms 30_000
@@ -116,7 +122,15 @@ defmodule L2E.Session.PlayerSession do
       # Pending party invite: {party_pid, invitor_name} — awaiting our answer
       pending_party_invite: nil,
       # Pending clan invite: {clan_pid, clan_name} — awaiting our answer
-      pending_clan_invite: nil
+      pending_clan_invite: nil,
+      # Active trade process (nil if not in a trade)
+      trade_pid: nil,
+      # Pending incoming trade request: {from_char_id, from_pid, trade_pid}
+      pending_trade: nil,
+      # Active enchant scroll object_id (nil if no enchant dialog open)
+      enchant_scroll_id: nil,
+      # Current zone type at player's position (:normal | :peace | :pvp | :siege | :no_pvp | :other)
+      zone_type: :normal
     }
 
     {:ok, state}
@@ -533,6 +547,18 @@ defmodule L2E.Session.PlayerSession do
     {:noreply, %{state | pending_clan_invite: {clan_pid, ""}}}
   end
 
+  # M27: Another player sends a trade invite to this player
+  def handle_info({:trade_invite, from_char_id, from_name, from_pid, trade_pid}, state) do
+    # Send a trade request packet to the client so they see the accept/decline dialog
+    pkt = %Server.SendTradeRequest{
+      partner_object_id: from_char_id,
+      partner_name: from_name
+    }
+
+    send(state.conn_pid, {:send_packet, pkt})
+    {:noreply, %{state | pending_trade: {from_char_id, from_pid, trade_pid}}}
+  end
+
   # Party disbanded or we were kicked — clear our party reference
   def handle_info(:party_disbanded, state) do
     {:noreply, %{state | party_pid: nil}}
@@ -807,7 +833,8 @@ defmodule L2E.Session.PlayerSession do
   end
 
   defp handle_packet(%L2E.Packet.Client.ValidatePosition{x: x, y: y, z: z, heading: h}, state) do
-    {:noreply, %{state | position: {x, y, z}, heading: h}}
+    zone_type = ZoneTable.zone_type_at(x, y, z)
+    {:noreply, %{state | position: {x, y, z}, heading: h, zone_type: zone_type}}
   end
 
   # ---- Action (0x04) — target selection or attack ------------------------
@@ -851,17 +878,26 @@ defmodule L2E.Session.PlayerSession do
         {:noreply, new_state}
 
       action_id == 1 ->
-        # Shift-click: attack
-        new_state = %{state | target_id: obj_id}
-        {:noreply, start_auto_attack(new_state)}
+        # Shift-click: attack — blocked in peace zones
+        if state.zone_type == :peace do
+          {:noreply, state}
+        else
+          new_state = %{state | target_id: obj_id}
+          {:noreply, start_auto_attack(new_state)}
+        end
     end
   end
 
   # ---- AttackRequest (0x0A) — direct attack ------------------------------
 
   defp handle_packet(%L2E.Packet.Client.AttackRequest{object_id: obj_id}, state) do
-    new_state = %{state | target_id: obj_id}
-    {:noreply, start_auto_attack(new_state)}
+    # Block attacks in peace zones
+    if state.zone_type == :peace do
+      {:noreply, state}
+    else
+      new_state = %{state | target_id: obj_id}
+      {:noreply, start_auto_attack(new_state)}
+    end
   end
 
   # ---- RequestTargetCanceld (0x37) — cancel target -----------------------
@@ -877,27 +913,128 @@ defmodule L2E.Session.PlayerSession do
          %L2E.Packet.Client.UseItem{object_id: obj_id},
          %{auth_state: :in_world} = state
        ) do
-    case Inventory.use_item(state.char_id, obj_id) do
-      {:ok, change_type, {instance, template}} ->
-        change_int = change_type_to_int(change_type)
-        pkt = %Server.InventoryUpdate{changes: [{change_int, instance, template}]}
-        send(state.conn_pid, {:send_packet, pkt})
+    # Check if the item being used is an enchant scroll
+    items = Inventory.get_items(state.char_id)
 
-        new_state =
-          if template.type in [:weapon, :armor] do
-            recalculate_stats_with_equipment(state)
-          else
-            apply_item_effect(state, template)
-          end
+    enchant_scroll =
+      Enum.find(items, fn {inst, _tmpl} -> inst.object_id == obj_id end)
+      |> case do
+        {inst, _tmpl} -> EnchantData.get(inst.item_id)
+        nil -> nil
+      end
 
-        {:noreply, new_state}
+    if enchant_scroll != nil do
+      # Open enchant dialog — just remember which scroll the player selected
+      {:noreply, %{state | enchant_scroll_id: obj_id}}
+    else
+      case Inventory.use_item(state.char_id, obj_id) do
+        {:ok, change_type, {instance, template}} ->
+          change_int = change_type_to_int(change_type)
+          pkt = %Server.InventoryUpdate{changes: [{change_int, instance, template}]}
+          send(state.conn_pid, {:send_packet, pkt})
 
-      {:error, _reason} ->
-        {:noreply, state}
+          new_state =
+            if template.type in [:weapon, :armor] do
+              recalculate_stats_with_equipment(state)
+            else
+              apply_item_effect(state, template)
+            end
+
+          {:noreply, new_state}
+
+        {:error, _reason} ->
+          {:noreply, state}
+      end
     end
   end
 
-  # ---- RequestSkillList (0x3F) — client requests skill window refresh ----
+  # ---- RequestEnchantItem (0x58) — player confirms enchant attempt -------
+
+  defp handle_packet(
+         %L2E.Packet.Client.RequestEnchantItem{object_id: item_obj_id},
+         %{auth_state: :in_world, enchant_scroll_id: scroll_obj_id} = state
+       )
+       when not is_nil(scroll_obj_id) do
+    items = Inventory.get_items(state.char_id)
+
+    # Find the scroll instance and the target item instance
+    scroll_pair = Enum.find(items, fn {inst, _} -> inst.object_id == scroll_obj_id end)
+    item_pair = Enum.find(items, fn {inst, _} -> inst.object_id == item_obj_id end)
+
+    case {scroll_pair, item_pair} do
+      {{scroll_inst, _scroll_tmpl}, {item_inst, item_tmpl}} ->
+        scroll_data = EnchantData.get(scroll_inst.item_id)
+
+        cond do
+          scroll_data == nil ->
+            send(state.conn_pid, {:send_packet, %Server.EnchantResult{result: :cancelled}})
+            {:noreply, %{state | enchant_scroll_id: nil}}
+
+          # Verify grade match — item grade must match scroll's target_grade
+          not grades_match?(item_tmpl, scroll_data.target_grade) ->
+            send(state.conn_pid, {:send_packet, %Server.EnchantResult{result: :cancelled}})
+            {:noreply, %{state | enchant_scroll_id: nil}}
+
+          true ->
+            current_enchant = item_inst.enchant_level || 0
+            result = EnchantData.try_enchant(scroll_inst.item_id, current_enchant)
+
+            # Consume the scroll regardless of result
+            Inventory.remove_item(state.char_id, scroll_inst.item_id, 1)
+
+            new_state =
+              case result do
+                :success ->
+                  new_enchant = current_enchant + 1
+                  Inventory.update_enchant(state.char_id, item_obj_id, new_enchant)
+                  send(state.conn_pid, {:send_packet, %Server.EnchantResult{result: :success}})
+                  state
+
+                :fail when scroll_data.blessed ->
+                  # Blessed scroll: item stays at current level
+                  send(
+                    state.conn_pid,
+                    {:send_packet, %Server.EnchantResult{result: :blessed_fail}}
+                  )
+
+                  state
+
+                :fail ->
+                  # Normal scroll: item destroyed on fail if enchant >= +4
+                  if current_enchant >= 4 do
+                    Inventory.remove_item(state.char_id, item_inst.item_id, 1)
+                    send(state.conn_pid, {:send_packet, %Server.EnchantResult{result: :fail}})
+                  else
+                    # Below +4 always succeeds per L2 rules — this branch shouldn't trigger,
+                    # but handle defensively: success anyway
+                    Inventory.update_enchant(state.char_id, item_obj_id, current_enchant + 1)
+                    send(state.conn_pid, {:send_packet, %Server.EnchantResult{result: :success}})
+                  end
+
+                  state
+
+                :max ->
+                  send(state.conn_pid, {:send_packet, %Server.EnchantResult{result: :cancelled}})
+                  state
+
+                :unknown_scroll ->
+                  send(state.conn_pid, {:send_packet, %Server.EnchantResult{result: :cancelled}})
+                  state
+              end
+
+            {:noreply, %{new_state | enchant_scroll_id: nil}}
+        end
+
+      _ ->
+        send(state.conn_pid, {:send_packet, %Server.EnchantResult{result: :cancelled}})
+        {:noreply, %{state | enchant_scroll_id: nil}}
+    end
+  end
+
+  defp handle_packet(%L2E.Packet.Client.RequestEnchantItem{}, state) do
+    send(state.conn_pid, {:send_packet, %Server.EnchantResult{result: :cancelled}})
+    {:noreply, %{state | enchant_scroll_id: nil}}
+  end
 
   defp handle_packet(%L2E.Packet.Client.RequestSkillList{}, %{auth_state: :in_world} = state) do
     send(state.conn_pid, {:send_packet, build_skill_list_packet(state.skills)})
@@ -905,6 +1042,14 @@ defmodule L2E.Session.PlayerSession do
   end
 
   # ---- RequestMagicSkillUse (0x2F) — player activates a skill ------------
+
+  defp handle_packet(
+         %L2E.Packet.Client.RequestMagicSkillUse{},
+         %{auth_state: :in_world, zone_type: :peace} = state
+       ) do
+    # Skills that target others are blocked in peace zones
+    {:noreply, state}
+  end
 
   defp handle_packet(
          %L2E.Packet.Client.RequestMagicSkillUse{skill_id: skill_id},
@@ -1036,6 +1181,182 @@ defmodule L2E.Session.PlayerSession do
   end
 
   defp handle_packet(%L2E.Packet.Client.RequestSellItem{}, state), do: {:noreply, state}
+
+  # ---- M26: Warehouse (0x32 withdraw, 0x33 deposit) ----------------------
+
+  defp handle_packet(
+         %L2E.Packet.Client.RequestWarehouseWithdraw{items: items},
+         %{auth_state: :in_world} = state
+       ) do
+    Enum.each(items, fn %{object_id: inst_id, count: qty} ->
+      case Warehouse.withdraw(state.char_id, inst_id, qty) do
+        {:ok, item} ->
+          {:ok, _change_type, {inv_inst, template}} =
+            Inventory.add_item(state.char_id, item.item_id, item.count)
+
+          pkt = %Server.InventoryUpdate{
+            changes: [{1, inv_inst, template}]
+          }
+
+          send(state.conn_pid, {:send_packet, pkt})
+
+        {:error, reason} ->
+          Logger.warning("[PlayerSession] warehouse withdraw failed: #{inspect(reason)}")
+      end
+    end)
+
+    {:noreply, state}
+  end
+
+  defp handle_packet(%L2E.Packet.Client.RequestWarehouseWithdraw{}, state), do: {:noreply, state}
+
+  defp handle_packet(
+         %L2E.Packet.Client.RequestWarehouseDeposit{items: items},
+         %{auth_state: :in_world} = state
+       ) do
+    Enum.each(items, fn %{object_id: inst_id, count: qty} ->
+      case Inventory.remove_item(state.char_id, inst_id, qty) do
+        {:ok, _change_type, {inst, _template}} ->
+          case Warehouse.deposit(state.char_id, inst.item_id, qty, inst.enchant_level || 0) do
+            {:ok, _wh_id} ->
+              # Send inventory update to remove item from client view
+              pkt = %Server.InventoryUpdate{changes: [{3, inst, %{}}]}
+              send(state.conn_pid, {:send_packet, pkt})
+
+            {:error, reason} ->
+              Logger.warning("[PlayerSession] warehouse deposit failed: #{inspect(reason)}")
+          end
+
+        {:error, reason} ->
+          Logger.warning(
+            "[PlayerSession] inventory remove for deposit failed: #{inspect(reason)}"
+          )
+      end
+    end)
+
+    {:noreply, state}
+  end
+
+  defp handle_packet(%L2E.Packet.Client.RequestWarehouseDeposit{}, state), do: {:noreply, state}
+
+  # ---- M27: Trade --------------------------------------------------------
+
+  defp handle_packet(
+         %L2E.Packet.Client.TradeRequest{target_object_id: target_obj_id},
+         %{auth_state: :in_world} = state
+       ) do
+    # target_obj_id is the object_id (DB id) of the target player
+    target_char_id = target_obj_id
+
+    cond do
+      target_char_id == state.char_id ->
+        {:noreply, state}
+
+      state.trade_pid != nil ->
+        {:noreply, state}
+
+      true ->
+        case Registry.lookup(L2E.Session.Registry, target_char_id) do
+          [{target_pid, _}] ->
+            case L2E.Trade.Supervisor.start_trade(
+                   state.char_id,
+                   target_char_id,
+                   self(),
+                   target_pid
+                 ) do
+              {:ok, trade_pid} ->
+                # Notify the target player of incoming trade request
+                send(
+                  target_pid,
+                  {:trade_invite, state.char_id, state.char_name, self(), trade_pid}
+                )
+
+                new_state = %{state | trade_pid: trade_pid}
+                {:noreply, new_state}
+
+              _ ->
+                {:noreply, state}
+            end
+
+          [] ->
+            {:noreply, state}
+        end
+    end
+  end
+
+  defp handle_packet(%L2E.Packet.Client.TradeRequest{}, state), do: {:noreply, state}
+
+  defp handle_packet(
+         %L2E.Packet.Client.AnswerTradeRequest{response: response},
+         %{auth_state: :in_world} = state
+       ) do
+    case state.pending_trade do
+      {from_char_id, from_pid, trade_pid} when response == 1 ->
+        # Accept — tell trade process we accepted
+        Trade.accept(trade_pid, state.char_id)
+        # Notify initiator
+        pkt = %Server.TradeStart{
+          partner_object_id: from_char_id,
+          items: []
+        }
+
+        send(from_pid, {:send_packet, pkt})
+
+        send(
+          state.conn_pid,
+          {:send_packet, %Server.TradeStart{partner_object_id: from_char_id, items: []}}
+        )
+
+        new_state = %{state | trade_pid: trade_pid, pending_trade: nil}
+        {:noreply, new_state}
+
+      {_from_char_id, _from_pid, trade_pid} ->
+        # Decline — cancel the trade process
+        Trade.cancel(trade_pid, state.char_id)
+        {:noreply, %{state | pending_trade: nil}}
+
+      nil ->
+        {:noreply, state}
+    end
+  end
+
+  defp handle_packet(%L2E.Packet.Client.AnswerTradeRequest{}, state), do: {:noreply, state}
+
+  defp handle_packet(
+         %L2E.Packet.Client.AddTradeItem{items: items},
+         %{auth_state: :in_world} = state
+       ) do
+    if trade_pid = state.trade_pid do
+      Enum.each(items, fn %{object_id: obj_id, count: qty} ->
+        Trade.add_item(trade_pid, state.char_id, obj_id, qty)
+      end)
+    end
+
+    {:noreply, state}
+  end
+
+  defp handle_packet(%L2E.Packet.Client.AddTradeItem{}, state), do: {:noreply, state}
+
+  defp handle_packet(
+         %L2E.Packet.Client.TradeDone{response: response},
+         %{auth_state: :in_world} = state
+       ) do
+    case state.trade_pid do
+      nil ->
+        {:noreply, state}
+
+      trade_pid ->
+        if response == 1 do
+          Trade.confirm(trade_pid, state.char_id)
+        else
+          Trade.cancel(trade_pid, state.char_id)
+        end
+
+        {:noreply, %{state | trade_pid: nil}}
+    end
+  end
+
+  defp handle_packet(%L2E.Packet.Client.TradeDone{}, state), do: {:noreply, state}
 
   # ---- M17: Chat (Say2 0x38) ---------------------------------------------
 
@@ -1518,16 +1839,43 @@ defmodule L2E.Session.PlayerSession do
     npc_info = L2E.NPC.Instance.get_info(npc_pid)
     template = npc_info[:template]
     npc_name = if template, do: template.name, else: "NPC"
+    npc_id = if template, do: template.npc_id, else: 0
 
-    # Basic dialog HTML — real dialogs would come from data/html/ files
+    teleport_links =
+      case TeleporterTable.get_normal(npc_id) do
+        [] ->
+          ""
+
+        dests ->
+          links =
+            Enum.map_join(dests, "", fn d ->
+              fee_str = if d.fee_count > 0, do: " (#{d.fee_count} adena)", else: ""
+
+              "<a action=\"bypass -h npc_#{obj_id}_teleport_#{d.x}_#{d.y}_#{d.z}_#{d.fee_count}\">#{d.name}#{fee_str}</a><br>"
+            end)
+
+          "<br>[ Teleport ]<br>" <> links
+      end
+
+    trade_link =
+      case BuyListTable.get_by_npc(npc_id) do
+        nil -> ""
+        _ -> "<a action=\"bypass -h npc_#{obj_id}_Trade\">Trade</a><br>"
+      end
+
+    warehouse_links =
+      "<a action=\"bypass -h npc_#{obj_id}_warehouse_deposit\">Warehouse Deposit</a><br>" <>
+        "<a action=\"bypass -h npc_#{obj_id}_warehouse_withdraw\">Warehouse Withdraw</a><br>"
+
     html = """
     <html><body>
     <title>#{npc_name}</title>
     <br>
     Hello, #{state.char_name}.<br>
     How can I help you?<br>
-    <a action="bypass -h npc_#{obj_id}_Trade">Trade</a><br>
-    <a action="bypass -h npc_#{obj_id}_Quest">Quests</a><br>
+    #{trade_link}
+    #{warehouse_links}
+    #{teleport_links}
     </body></html>
     """
 
@@ -1541,7 +1889,7 @@ defmodule L2E.Session.PlayerSession do
   defp handle_bypass(cmd, state) do
     cond do
       String.starts_with?(cmd, "npc_") ->
-        # e.g. "npc_12345_Trade"
+        # e.g. "npc_12345_Trade" or "npc_12345_teleport_x_y_z_fee"
         case String.split(cmd, "_", parts: 3) do
           ["npc", npc_id_str, action] ->
             npc_id = String.to_integer(npc_id_str)
@@ -1557,14 +1905,10 @@ defmodule L2E.Session.PlayerSession do
   end
 
   defp handle_npc_bypass(npc_id, "Trade", state) do
-    npc_pid = find_npc_pid(npc_id)
-    npc_info = if npc_pid, do: L2E.NPC.Instance.get_info(npc_pid), else: %{}
-    template = npc_info[:template]
-
     buy_list_items =
-      case template do
+      case BuyListTable.get_by_npc(npc_id) do
         nil -> []
-        t -> build_buy_list(t.npc_id)
+        items -> Enum.map(items, &%{item_id: &1.item_id, price: &1.price})
       end
 
     adena_count = Inventory.get_adena_count(state.char_id)
@@ -1582,20 +1926,78 @@ defmodule L2E.Session.PlayerSession do
     {:noreply, state}
   end
 
+  # M25: Teleport bypass — "teleport_x_y_z_fee"
+  defp handle_npc_bypass(_npc_id, "teleport_" <> rest, state) do
+    case String.split(rest, "_") do
+      [x_str, y_str, z_str, fee_str] ->
+        x = String.to_integer(x_str)
+        y = String.to_integer(y_str)
+        z = String.to_integer(z_str)
+        fee = String.to_integer(fee_str)
+
+        adena = Inventory.get_adena_count(state.char_id)
+
+        if adena >= fee do
+          Inventory.spend_adena(state.char_id, fee)
+          new_state = do_teleport({x, y, z}, state)
+          {:noreply, new_state}
+        else
+          {:noreply, state}
+        end
+
+      _ ->
+        {:noreply, state}
+    end
+  end
+
+  defp handle_npc_bypass(_npc_id, "warehouse_deposit", state) do
+    items = Inventory.get_items(state.char_id)
+
+    adena =
+      Enum.find_value(items, 0, fn {inst, _tmpl} ->
+        if inst.item_id == 57, do: inst.count || 0, else: nil
+      end)
+
+    # Filter: adena (57) cannot be deposited
+    depositable =
+      Enum.reject(items, fn {inst, _} -> inst.item_id == 57 end)
+      |> Enum.map(fn {inst, _tmpl} -> inst end)
+
+    pkt = %Server.WareHouseDepositList{
+      player_adena: adena,
+      items: depositable
+    }
+
+    send(state.conn_pid, {:send_packet, pkt})
+    {:noreply, state}
+  end
+
+  defp handle_npc_bypass(_npc_id, "warehouse_withdraw", state) do
+    wh_items = Warehouse.list(state.char_id)
+
+    pkt = %Server.WareHouseWithdrawList{items: wh_items}
+    send(state.conn_pid, {:send_packet, pkt})
+    {:noreply, state}
+  end
+
   defp handle_npc_bypass(_npc_id, _action, state), do: {:noreply, state}
 
-  # Build a minimal buy list for a given NPC type.
-  # In a full implementation this would read from data/merchants/ XML files.
-  defp build_buy_list(_npc_id) do
-    # Placeholder: return a few basic items for any merchant
-    [
-      # Adena (dummy)
-      %{item_id: 57, price: 0},
-      # Health Potion
-      %{item_id: 1835, price: 60},
-      # Mana Potion
-      %{item_id: 1831, price: 40}
-    ]
+  # Execute a teleport: leave current region, move to new coords, enter new region
+  defp do_teleport({x, y, z}, state) do
+    # Leave current region
+    if state.region_pid do
+      Region.remove_entity(state.region_pid, {:player, state.char_id})
+    end
+
+    new_region_pid = Region.get_or_start({x, y})
+    Region.add_entity(new_region_pid, {:player, state.char_id}, self())
+
+    send(
+      state.conn_pid,
+      {:send_packet, %Server.TeleportToLocation{object_id: state.char_id, x: x, y: y, z: z}}
+    )
+
+    %{state | position: {x, y, z}, region_pid: new_region_pid}
   end
 
   defp cancel_timer(nil), do: :ok
@@ -1657,6 +2059,19 @@ defmodule L2E.Session.PlayerSession do
   defp change_type_to_int(:added), do: 1
   defp change_type_to_int(:modified), do: 2
   defp change_type_to_int(:removed), do: 3
+
+  # Checks whether the item's grade matches the enchant scroll's target_grade string.
+  # Item template has a :grade field (:S, :A, :B, :C, :D, or :none).
+  defp grades_match?(item_tmpl, target_grade_str) do
+    item_grade =
+      case Map.get(item_tmpl, :grade, :none) do
+        g when is_atom(g) -> Atom.to_string(g) |> String.upcase()
+        g when is_binary(g) -> String.upcase(g)
+        _ -> "NONE"
+      end
+
+    item_grade == String.upcase(target_grade_str)
+  end
 
   # -----------------------------------------------------------------------
   # Skill helpers

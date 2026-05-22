@@ -1462,3 +1462,311 @@ defmodule L2E.Packet.Server.PledgeShowMemberListDelete do
     :unicode.characters_to_binary(str, :utf8, {:utf16, :little}) <> <<0::16>>
   end
 end
+
+defmodule L2E.Packet.Server.TeleportToLocation do
+  @moduledoc """
+  Opcode 0x29 — teleports a character (or NPC) to the given coordinates.
+
+  The client immediately moves the target object to the new position and
+  plays the teleport visual effect.
+
+  Binary layout (TeleportToLocation.java):
+    object_id(32) x(32) y(32) z(32)
+
+  Reference: ServerPackets.TELEPORT_TO_LOCATION(0x29)
+  """
+  @behaviour L2E.Packet.Encodable
+
+  defstruct [:object_id, :x, :y, :z]
+  @type t :: %__MODULE__{}
+
+  @opcode 0x29
+
+  @impl L2E.Packet.Encodable
+  def encode(%__MODULE__{} = p) do
+    <<@opcode::8, p.object_id::little-32, p.x::little-32-signed, p.y::little-32-signed,
+      p.z::little-32-signed>>
+  end
+end
+
+defmodule L2E.Packet.Server.WareHouseDepositList do
+  @moduledoc """
+  Opcode 0x41 — sends the list of items the player can deposit into their warehouse.
+
+  The client shows the deposit UI with all inventory items eligible for deposit.
+
+  Binary layout (WareHouseDepositList.java):
+    player_adena(32) count(32) + per item: object_id(32) item_id(32) count(32) enchant(16)
+
+  Reference: ServerPackets.WARE_HOUSE_DEPOSIT_LIST(0x41)
+  """
+  @behaviour L2E.Packet.Encodable
+
+  defstruct [:player_adena, items: []]
+  @type t :: %__MODULE__{}
+
+  @opcode 0x41
+
+  @impl L2E.Packet.Encodable
+  def encode(%__MODULE__{} = p) do
+    count = length(p.items)
+
+    items_bin =
+      Enum.map_join(p.items, fn item ->
+        <<item[:id] || item[:object_id] || 0::little-32, item.item_id::little-32,
+          item.count::little-32, item[:enchant_level] || 0::little-16>>
+      end)
+
+    <<@opcode::8, p.player_adena || 0::little-32, count::little-32>> <> items_bin
+  end
+end
+
+defmodule L2E.Packet.Server.WareHouseWithdrawList do
+  @moduledoc """
+  Opcode 0x42 — sends the list of items currently stored in the warehouse.
+
+  The client shows the withdrawal UI.
+
+  Binary layout (WareHouseWithdrawList.java):
+    count(32) + per item: object_id(32) item_id(32) count(32) enchant(16)
+
+  Reference: ServerPackets.WARE_HOUSE_WITHDRAW_LIST(0x42)
+  """
+  @behaviour L2E.Packet.Encodable
+
+  defstruct items: []
+  @type t :: %__MODULE__{}
+
+  @opcode 0x42
+
+  @impl L2E.Packet.Encodable
+  def encode(%__MODULE__{items: items}) do
+    count = length(items)
+
+    items_bin =
+      Enum.map_join(items, fn item ->
+        <<item.id::little-32, item.item_id::little-32, item.count::little-32,
+          item[:enchant_level] || 0::little-16>>
+      end)
+
+    <<@opcode::8, count::little-32>> <> items_bin
+  end
+end
+
+defmodule L2E.Packet.Server.SendTradeRequest do
+  @moduledoc """
+  Opcode 0x5E — server sends a trade invite to the target player.
+
+  Binary layout: partner_object_id(32)
+
+  Reference: ServerPackets.SEND_TRADE_REQUEST(0x5E)
+  """
+  @behaviour L2E.Packet.Encodable
+
+  defstruct [:partner_object_id, :partner_name]
+  @type t :: %__MODULE__{}
+
+  @opcode 0x5E
+
+  @impl L2E.Packet.Encodable
+  def encode(%__MODULE__{} = p) do
+    name_bin = encode_string(p.partner_name || "")
+    <<@opcode::8, p.partner_object_id || 0::little-32>> <> name_bin
+  end
+
+  defp encode_string(s) do
+    chars = :unicode.characters_to_binary(s, :utf8, {:utf16, :little})
+    chars <> <<0::16>>
+  end
+end
+
+defmodule L2E.Packet.Server.TradeStart do
+  @moduledoc """
+  Opcode 0x1E — opens the trade window on the client.
+
+  Binary layout (TradeStart.java): partner_object_id(32) count(32) + per item:
+    object_id(32) item_id(32) count(64) enchant(16) ...
+
+  Reference: ServerPackets.TRADE_START(0x1E)
+  """
+  @behaviour L2E.Packet.Encodable
+
+  defstruct [:partner_object_id, items: []]
+  @type t :: %__MODULE__{}
+
+  @opcode 0x1E
+
+  @impl L2E.Packet.Encodable
+  def encode(%__MODULE__{} = p) do
+    count = length(p.items)
+
+    items_bin =
+      Enum.map_join(p.items, fn item ->
+        obj_id = item[:id] || item[:object_id] || 0
+
+        <<obj_id::little-32, item.item_id::little-32, item[:count] || 1::little-64,
+          item[:enchant_level] || 0::little-16>>
+      end)
+
+    <<@opcode::8, p.partner_object_id || 0::little-32, count::little-32>> <> items_bin
+  end
+end
+
+defmodule L2E.Packet.Server.TradeOwnAdd do
+  @moduledoc """
+  Opcode 0x20 — player's own offer updated.
+
+  Binary layout: count(32) + per item: object_id(32) item_id(32) count(64) enchant(16)
+
+  Reference: ServerPackets.TRADE_OWN_ADD(0x20)
+  """
+  @behaviour L2E.Packet.Encodable
+
+  defstruct items: []
+  @type t :: %__MODULE__{}
+
+  @opcode 0x20
+
+  @impl L2E.Packet.Encodable
+  def encode(%__MODULE__{items: items}) do
+    count = length(items)
+
+    items_bin =
+      Enum.map_join(items, fn {obj_id, qty} ->
+        <<obj_id::little-32, 0::little-32, qty::little-64, 0::little-16>>
+      end)
+
+    <<@opcode::8, count::little-32>> <> items_bin
+  end
+end
+
+defmodule L2E.Packet.Server.TradeOtherAdd do
+  @moduledoc """
+  Opcode 0x21 — partner's offer updated.
+
+  Reference: ServerPackets.TRADE_OTHER_ADD(0x21)
+  """
+  @behaviour L2E.Packet.Encodable
+
+  defstruct [:side, items: []]
+  @type t :: %__MODULE__{}
+
+  @opcode 0x21
+
+  @impl L2E.Packet.Encodable
+  def encode(%__MODULE__{items: items}) do
+    count = length(items)
+
+    items_bin =
+      Enum.map_join(items, fn {obj_id, qty} ->
+        <<obj_id::little-32, 0::little-32, qty::little-64, 0::little-16>>
+      end)
+
+    <<@opcode::8, count::little-32>> <> items_bin
+  end
+end
+
+defmodule L2E.Packet.Server.TradeDone do
+  @moduledoc """
+  Opcode 0x22 — trade is complete (or failed).
+
+  Binary layout: result(32) where 1=success, 0=cancel
+
+  Reference: ServerPackets.TRADE_DONE(0x22)
+  """
+  @behaviour L2E.Packet.Encodable
+
+  defstruct [:result]
+  @type t :: %__MODULE__{}
+
+  @opcode 0x22
+
+  @impl L2E.Packet.Encodable
+  def encode(%__MODULE__{result: result}) do
+    result_int = if result == :success, do: 1, else: 0
+    <<@opcode::8, result_int::little-32>>
+  end
+end
+
+defmodule L2E.Packet.Server.TradeCancelled do
+  @moduledoc """
+  Opcode 0x22 with result=0 — trade was cancelled.
+
+  We reuse TradeDone with result=:cancel for the same wire format.
+  This module exists as a convenience alias.
+
+  Reference: ServerPackets.TRADE_DONE(0x22) with result 0
+  """
+  @behaviour L2E.Packet.Encodable
+
+  defstruct []
+  @type t :: %__MODULE__{}
+
+  @opcode 0x22
+
+  @impl L2E.Packet.Encodable
+  def encode(%__MODULE__{}) do
+    <<@opcode::8, 0::little-32>>
+  end
+end
+
+defmodule L2E.Packet.Server.TradeConfirm do
+  @moduledoc """
+  Opcode 0x75 or 0x7C — one player pressed OK in the trade window.
+
+  0x75 = own side confirmed (TRADE_PRESS_OWN_OK)
+  0x7C = other side confirmed (TRADE_PRESS_OTHER_OK)
+
+  Reference: ServerPackets.TRADE_PRESS_OWN_OK(0x75), TRADE_PRESS_OTHER_OK(0x7C)
+  """
+  @behaviour L2E.Packet.Encodable
+
+  defstruct [:side]
+  @type t :: %__MODULE__{}
+
+  @impl L2E.Packet.Encodable
+  def encode(%__MODULE__{side: :a}) do
+    <<0x75::8>>
+  end
+
+  def encode(%__MODULE__{side: :b}) do
+    <<0x7C::8>>
+  end
+
+  def encode(%__MODULE__{}) do
+    <<0x75::8>>
+  end
+end
+
+defmodule L2E.Packet.Server.EnchantResult do
+  @moduledoc """
+  Opcode 0x81 — reports the result of an enchant attempt to the client.
+
+  Binary layout: result(32)
+    0 = cancelled/failed + item destroyed
+    1 = success
+    2 = failed + item destroyed
+    3 = blessed fail (item kept at current enchant)
+
+  Reference: ServerPackets.ENCHANT_RESULT(0x81)
+  """
+  @behaviour L2E.Packet.Encodable
+
+  defstruct [:result]
+  @type t :: %__MODULE__{}
+
+  @opcode 0x81
+
+  @impl L2E.Packet.Encodable
+  def encode(%__MODULE__{result: result}) do
+    result_int =
+      case result do
+        :success -> 1
+        :fail -> 2
+        :blessed_fail -> 3
+        _ -> 0
+      end
+
+    <<@opcode::8, result_int::little-32>>
+  end
+end

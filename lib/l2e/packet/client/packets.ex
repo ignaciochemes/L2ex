@@ -15,7 +15,7 @@ end
 
 defmodule L2E.Packet.Client.AuthLogin do
   @moduledoc """
-  Opcode 0x08 — sent by the game client after connecting to confirm the
+  Opcode 0x08 â€” sent by the game client after connecting to confirm the
   session established with the login server.
 
   Body (from AuthLogin.java):
@@ -65,7 +65,7 @@ defmodule L2E.Packet.Client.AuthLogin do
 end
 
 defmodule L2E.Packet.Client.EnterWorld do
-  @moduledoc "Opcode 0x03 — client confirms character selection and requests world entry."
+  @moduledoc "Opcode 0x03 â€” client confirms character selection and requests world entry."
   @behaviour L2E.Packet.Decodable
 
   defstruct []
@@ -76,7 +76,7 @@ defmodule L2E.Packet.Client.EnterWorld do
 end
 
 defmodule L2E.Packet.Client.CharacterSelect do
-  @moduledoc "Opcode 0x0D — client selects a character slot on the character screen."
+  @moduledoc "Opcode 0x0D â€” client selects a character slot on the character screen."
   @behaviour L2E.Packet.Decodable
 
   defstruct [:slot]
@@ -144,7 +144,7 @@ defmodule L2E.Packet.Client.ValidatePosition do
 end
 
 defmodule L2E.Packet.Client.NewCharacter do
-  @moduledoc "Opcode 0x0E — client requests the character template list for the creation screen."
+  @moduledoc "Opcode 0x0E â€” client requests the character template list for the creation screen."
   @behaviour L2E.Packet.Decodable
 
   defstruct []
@@ -156,7 +156,7 @@ end
 
 defmodule L2E.Packet.Client.CharacterCreate do
   @moduledoc """
-  Opcode 0x0B — client submits a new character creation request.
+  Opcode 0x0B â€” client submits a new character creation request.
 
   Body (CharacterCreate.java): name(string) race(int) sex(int) class_id(int)
     int_s(int) str_s(int) con_s(int) men_s(int) dex_s(int) wit_s(int)
@@ -203,7 +203,7 @@ defmodule L2E.Packet.Client.CharacterCreate do
 end
 
 defmodule L2E.Packet.Client.CharacterDelete do
-  @moduledoc "Opcode 0x0C — client requests deletion of a character in the given slot."
+  @moduledoc "Opcode 0x0C â€” client requests deletion of a character in the given slot."
   @behaviour L2E.Packet.Decodable
 
   defstruct [:slot]
@@ -219,7 +219,7 @@ end
 
 defmodule L2E.Packet.Client.Action do
   @moduledoc """
-  Opcode 0x04 — player clicks on an object.
+  Opcode 0x04 â€” player clicks on an object.
 
   action_id 0 = normal interaction / target selection
   action_id 1 = shift-click (force-attack)
@@ -244,7 +244,7 @@ end
 
 defmodule L2E.Packet.Client.AttackRequest do
   @moduledoc """
-  Opcode 0x0A — direct attack request on a target.
+  Opcode 0x0A â€” direct attack request on a target.
 
   Body (AttackRequest.java): obj_id(int) x(int) y(int) z(int) attack_id(byte)
   """
@@ -265,7 +265,7 @@ defmodule L2E.Packet.Client.AttackRequest do
 end
 
 defmodule L2E.Packet.Client.RequestTargetCanceld do
-  @moduledoc "Opcode 0x37 — player cancels their current target."
+  @moduledoc "Opcode 0x37 â€” player cancels their current target."
   @behaviour L2E.Packet.Decodable
 
   defstruct []
@@ -277,7 +277,7 @@ end
 
 defmodule L2E.Packet.Client.UseItem do
   @moduledoc """
-  Opcode 0x19 — player activates an item (equip weapon/armor, consume potion).
+  Opcode 0x19 â€” player activates an item (equip weapon/armor, consume potion).
 
   Body: obj_id(32) ctrl(32)
   `ctrl` is 0 for normal use, 1 for ctrl-click (forced action).
@@ -303,7 +303,7 @@ end
 
 defmodule L2E.Packet.Client.RequestPickUpItem do
   @moduledoc """
-  Opcode 0x16 — player attempts to pick up a ground item.
+  Opcode 0x16 â€” player attempts to pick up a ground item.
 
   Body: object_id(32)
 
@@ -324,12 +324,12 @@ end
 
 defmodule L2E.Packet.Client.RequestMagicSkillUse do
   @moduledoc """
-  Opcode 0x2F — player activates a skill from their skill bar.
+  Opcode 0x2F â€” player activates a skill from their skill bar.
 
   Body (RequestMagicSkillUse.java):
-    skill_id     LE-32  — the skill to cast
-    ctrl_pressed LE-32  — non-zero if Ctrl was held (force-attack in peace zones)
-    shift_key    byte   — non-zero if Shift was held (cast without movement)
+    skill_id     LE-32  â€” the skill to cast
+    ctrl_pressed LE-32  â€” non-zero if Ctrl was held (force-attack in peace zones)
+    shift_key    byte   â€” non-zero if Shift was held (cast without movement)
 
   Reference: ClientPackets.java REQUEST_MAGIC_SKILL_USE(0x2F)
   """
@@ -356,7 +356,7 @@ end
 
 defmodule L2E.Packet.Client.RequestSkillList do
   @moduledoc """
-  Opcode 0x3F — client requests a refresh of the skill list window.
+  Opcode 0x3F â€” client requests a refresh of the skill list window.
 
   Body: empty.
 
@@ -371,11 +371,11 @@ defmodule L2E.Packet.Client.RequestSkillList do
   def decode(_body), do: {:ok, %__MODULE__{}}
 end
 
-# ── M16: NPC Interaction ──────────────────────────────────────────────────────
+# â”€â”€ M16: NPC Interaction â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 defmodule L2E.Packet.Client.RequestBypassToServer do
   @moduledoc """
-  Opcode 0x21 — client-side NPC dialog action (bypass command).
+  Opcode 0x21 â€” client-side NPC dialog action (bypass command).
 
   Sent when the player clicks a link inside an NPC HTML dialog.
   The bypass string is the "href" value from the HTML, e.g.
@@ -409,7 +409,7 @@ end
 
 defmodule L2E.Packet.Client.RequestBuyItem do
   @moduledoc """
-  Opcode 0x1F — client buys items from a merchant NPC.
+  Opcode 0x1F â€” client buys items from a merchant NPC.
 
   Body (RequestBuyItem.java):
     npc_object_id(32) count(16) + per item: item_id(32) count(64)
@@ -440,7 +440,7 @@ end
 
 defmodule L2E.Packet.Client.RequestSellItem do
   @moduledoc """
-  Opcode 0x1E — client sells items to a merchant NPC.
+  Opcode 0x1E â€” client sells items to a merchant NPC.
 
   Body (RequestSellItem.java):
     npc_object_id(32) count(16) + per item: obj_id(32) item_id(32) count(64)
@@ -473,11 +473,11 @@ defmodule L2E.Packet.Client.RequestSellItem do
   defp parse_items(_, _, acc), do: Enum.reverse(acc)
 end
 
-# ── M17: Chat ─────────────────────────────────────────────────────────────────
+# â”€â”€ M17: Chat â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 defmodule L2E.Packet.Client.Say2 do
   @moduledoc """
-  Opcode 0x38 — player sends a chat message.
+  Opcode 0x38 â€” player sends a chat message.
 
   chat_type:
     0 = SAY (normal, nearby)    1 = SHOUT (wider area)
@@ -524,11 +524,11 @@ defmodule L2E.Packet.Client.Say2 do
   defp do_utf16(_, _), do: :error
 end
 
-# ── M21: Party ────────────────────────────────────────────────────────────────
+# â”€â”€ M21: Party â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 defmodule L2E.Packet.Client.RequestJoinParty do
   @moduledoc """
-  Opcode 0x29 — player invites another player to a party.
+  Opcode 0x29 â€” player invites another player to a party.
 
   Body (RequestJoinParty.java): target_name(string) distribution_type(32)
 
@@ -568,9 +568,9 @@ end
 
 defmodule L2E.Packet.Client.RequestAnswerJoinParty do
   @moduledoc """
-  Opcode 0x2A — player accepts or refuses a party invitation.
+  Opcode 0x2A â€” player accepts or refuses a party invitation.
 
-  Body (RequestAnswerJoinParty.java): response(32) — 1=accept, 0=refuse
+  Body (RequestAnswerJoinParty.java): response(32) â€” 1=accept, 0=refuse
 
   Reference: ClientPackets.java REQUEST_ANSWER_JOIN_PARTY(0x2A)
   """
@@ -589,7 +589,7 @@ end
 
 defmodule L2E.Packet.Client.RequestWithDrawalParty do
   @moduledoc """
-  Opcode 0x2B — player leaves the party voluntarily.
+  Opcode 0x2B â€” player leaves the party voluntarily.
 
   Body: empty.
 
@@ -606,7 +606,7 @@ end
 
 defmodule L2E.Packet.Client.RequestOustPartyMember do
   @moduledoc """
-  Opcode 0x2C — party leader kicks a member.
+  Opcode 0x2C â€” party leader kicks a member.
 
   Body (RequestOustPartyMember.java): target_name(string)
 
@@ -634,11 +634,11 @@ defmodule L2E.Packet.Client.RequestOustPartyMember do
   defp do_utf16(_, _), do: :error
 end
 
-# ── M22: Clans ────────────────────────────────────────────────────────────────
+# â”€â”€ M22: Clans â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 defmodule L2E.Packet.Client.RequestJoinPledge do
   @moduledoc """
-  Opcode 0x24 — clan leader invites a player to the clan.
+  Opcode 0x24 â€” clan leader invites a player to the clan.
 
   Body (RequestJoinPledge.java): target_id(32) pledge_type(32)
 
@@ -659,9 +659,9 @@ end
 
 defmodule L2E.Packet.Client.RequestAnswerJoinPledge do
   @moduledoc """
-  Opcode 0x25 — player accepts or refuses a clan invitation.
+  Opcode 0x25 â€” player accepts or refuses a clan invitation.
 
-  Body (RequestAnswerJoinPledge.java): response(32) — 1=accept, 0=refuse
+  Body (RequestAnswerJoinPledge.java): response(32) â€” 1=accept, 0=refuse
 
   Reference: ClientPackets.java REQUEST_ANSWER_JOIN_PLEDGE(0x25)
   """
@@ -680,7 +680,7 @@ end
 
 defmodule L2E.Packet.Client.RequestWithdrawalPledge do
   @moduledoc """
-  Opcode 0x26 — player leaves the clan voluntarily.
+  Opcode 0x26 â€” player leaves the clan voluntarily.
 
   Body: empty.
 
@@ -697,7 +697,7 @@ end
 
 defmodule L2E.Packet.Client.RequestOustPledgeMember do
   @moduledoc """
-  Opcode 0x27 — clan leader kicks a member.
+  Opcode 0x27 â€” clan leader kicks a member.
 
   Body (RequestOustPledgeMember.java): target_name(string)
 
@@ -723,4 +723,204 @@ defmodule L2E.Packet.Client.RequestOustPledgeMember do
 
   defp do_utf16(<<cp::little-16, rest::binary>>, acc), do: do_utf16(rest, [cp | acc])
   defp do_utf16(_, _), do: :error
+end
+
+defmodule L2E.Packet.Client.RequestTeleportToLocation do
+  @moduledoc """
+  Opcode 0x1F â€” player confirms a teleport from an NPC dialog.
+
+  Body (RequestTeleportToLocation.java):
+    target_id(32) x(32) y(32) z(32)
+
+  Reference: ClientPackets.java REQUEST_TELEPORT_TO_LOCATION(0x1F)
+  """
+  @behaviour L2E.Packet.Decodable
+
+  defstruct [:target_id, :x, :y, :z]
+  @type t :: %__MODULE__{}
+
+  @impl L2E.Packet.Decodable
+  def decode(
+        <<target_id::little-32-signed, x::little-32-signed, y::little-32-signed,
+          z::little-32-signed, _rest::binary>>
+      ) do
+    {:ok, %__MODULE__{target_id: target_id, x: x, y: y, z: z}}
+  end
+
+  def decode(_), do: {:error, :malformed}
+end
+
+defmodule L2E.Packet.Client.RequestWarehouseWithdraw do
+  @moduledoc """
+  Opcode 0x32 â€” player withdraws one or more items from their private warehouse.
+
+  Body (RequestWarehouseWithdraw.java):
+    count(16) + per item: object_id(32) count(64)
+
+  Reference: ClientPackets.java REQUEST_WARE_HOUSE_WITHDRAW_ITEM(0x32)
+  """
+  @behaviour L2E.Packet.Decodable
+
+  defstruct [:items]
+  @type t :: %__MODULE__{}
+
+  @impl L2E.Packet.Decodable
+  def decode(<<count::little-16, rest::binary>>) do
+    case decode_items(rest, count, []) do
+      {:ok, items} -> {:ok, %__MODULE__{items: items}}
+      :error -> {:error, :malformed}
+    end
+  end
+
+  def decode(_), do: {:error, :malformed}
+
+  defp decode_items(_, 0, acc), do: {:ok, Enum.reverse(acc)}
+
+  defp decode_items(<<obj_id::little-32, qty::little-64, rest::binary>>, n, acc) do
+    decode_items(rest, n - 1, [%{object_id: obj_id, count: qty} | acc])
+  end
+
+  defp decode_items(_, _, _), do: :error
+end
+
+defmodule L2E.Packet.Client.RequestWarehouseDeposit do
+  @moduledoc """
+  Opcode 0x33 â€” player deposits one or more items into their private warehouse.
+
+  Body (RequestWarehouseDeposit.java):
+    count(16) + per item: object_id(32) count(64)
+
+  Reference: ClientPackets.java REQUEST_WARE_HOUSE_DEPOSIT_ITEM(0x33)
+  """
+  @behaviour L2E.Packet.Decodable
+
+  defstruct [:items]
+  @type t :: %__MODULE__{}
+
+  @impl L2E.Packet.Decodable
+  def decode(<<count::little-16, rest::binary>>) do
+    case decode_deposit_items(rest, count, []) do
+      {:ok, items} -> {:ok, %__MODULE__{items: items}}
+      :error -> {:error, :malformed}
+    end
+  end
+
+  def decode(_), do: {:error, :malformed}
+
+  defp decode_deposit_items(_, 0, acc), do: {:ok, Enum.reverse(acc)}
+
+  defp decode_deposit_items(<<obj_id::little-32, qty::little-64, rest::binary>>, n, acc) do
+    decode_deposit_items(rest, n - 1, [%{object_id: obj_id, count: qty} | acc])
+  end
+
+  defp decode_deposit_items(_, _, _), do: :error
+end
+
+defmodule L2E.Packet.Client.TradeRequest do
+  @moduledoc """
+  Opcode 0x15 â€” player initiates a trade with a target.
+
+  Body (TradeRequest.java): target_object_id(32)
+
+  Reference: ClientPackets.TRADE_REQUEST(0x15)
+  """
+  @behaviour L2E.Packet.Decodable
+
+  defstruct [:target_object_id]
+  @type t :: %__MODULE__{}
+
+  @impl L2E.Packet.Decodable
+  def decode(<<target_id::little-32, _rest::binary>>) do
+    {:ok, %__MODULE__{target_object_id: target_id}}
+  end
+
+  def decode(_), do: {:error, :malformed}
+end
+
+defmodule L2E.Packet.Client.AddTradeItem do
+  @moduledoc """
+  Opcode 0x16 â€” player adds items to their trade offer.
+
+  Body (AddTradeItem.java): count(16) + per item: object_id(32) count(64)
+
+  Reference: ClientPackets.ADD_TRADE_ITEM(0x16)
+  """
+  @behaviour L2E.Packet.Decodable
+
+  defstruct [:items]
+  @type t :: %__MODULE__{}
+
+  @impl L2E.Packet.Decodable
+  def decode(<<count::little-16, rest::binary>>) do
+    case decode_trade_items(rest, count, []) do
+      {:ok, items} -> {:ok, %__MODULE__{items: items}}
+      :error -> {:error, :malformed}
+    end
+  end
+
+  def decode(_), do: {:error, :malformed}
+
+  defp decode_trade_items(_, 0, acc), do: {:ok, Enum.reverse(acc)}
+
+  defp decode_trade_items(<<obj_id::little-32, qty::little-64, rest::binary>>, n, acc) do
+    decode_trade_items(rest, n - 1, [%{object_id: obj_id, count: qty} | acc])
+  end
+
+  defp decode_trade_items(_, _, _), do: :error
+end
+
+defmodule L2E.Packet.Client.TradeDone do
+  @moduledoc """
+  Opcode 0x17 â€” player confirms or cancels the trade.
+
+  Body (TradeDone.java): response(32) â€” 1=confirm, 0=cancel
+
+  Reference: ClientPackets.TRADE_DONE(0x17)
+  """
+  @behaviour L2E.Packet.Decodable
+
+  defstruct [:response]
+  @type t :: %__MODULE__{}
+
+  @impl L2E.Packet.Decodable
+  def decode(<<response::little-32, _rest::binary>>) do
+    {:ok, %__MODULE__{response: response}}
+  end
+
+  def decode(_), do: {:error, :malformed}
+end
+
+defmodule L2E.Packet.Client.AnswerTradeRequest do
+  @moduledoc """
+  Opcode 0x44 â€” target player accepts or rejects the trade invite.
+
+  Body (AnswerTradeRequest.java): response(32) â€” 1=accept, 0=decline
+
+  Reference: ClientPackets.ANSWER_TRADE_REQUEST(0x44)
+  """
+  @behaviour L2E.Packet.Decodable
+
+  defstruct [:response]
+  @type t :: %__MODULE__{}
+
+  @impl L2E.Packet.Decodable
+  def decode(<<response::little-32, _rest::binary>>) do
+    {:ok, %__MODULE__{response: response}}
+  end
+
+  def decode(_), do: {:error, :malformed}
+end
+
+defmodule L2E.Packet.Client.RequestEnchantItem do
+  @behaviour L2E.Packet.Decodable
+
+  defstruct [:object_id]
+  @type t :: %__MODULE__{}
+
+  @impl L2E.Packet.Decodable
+  def decode(<<object_id::little-32, _rest::binary>>) do
+    {:ok, %__MODULE__{object_id: object_id}}
+  end
+
+  def decode(_), do: {:error, :malformed}
 end

@@ -73,6 +73,14 @@ defmodule L2E.Inventory do
     GenServer.call(via_tuple(char_id), :get_equip_bonuses)
   end
 
+  @doc "Removes `amount` of adena (item_id 57) from inventory. Returns :ok or {:error, reason}."
+  @spec spend_adena(pos_integer(), pos_integer()) :: :ok | {:error, term()}
+  def spend_adena(char_id, amount) when amount > 0 do
+    GenServer.call(via_tuple(char_id), {:spend_adena, amount})
+  end
+
+  def spend_adena(_char_id, 0), do: :ok
+
   @doc "Returns the amount of adena (item_id 57) in the inventory."
   @spec get_adena_count(pos_integer()) :: non_neg_integer()
   def get_adena_count(char_id) do
@@ -84,6 +92,12 @@ defmodule L2E.Inventory do
           {:ok, :modified | :removed, {Instance.t(), Template.t()}} | {:error, term()}
   def remove_item(char_id, item_instance_id, count) do
     GenServer.call(via_tuple(char_id), {:remove_item, item_instance_id, count})
+  end
+
+  @doc "Updates the enchant level of the given item instance (by object_id)."
+  @spec update_enchant(pos_integer(), pos_integer(), non_neg_integer()) :: :ok
+  def update_enchant(char_id, object_id, enchant_level) do
+    GenServer.call(via_tuple(char_id), {:update_enchant, object_id, enchant_level})
   end
 
   # -----------------------------------------------------------------------
@@ -157,6 +171,29 @@ defmodule L2E.Inventory do
     {:reply, count, state}
   end
 
+  def handle_call({:spend_adena, amount}, _from, state) do
+    adena_id = 57
+
+    case Enum.find(state.items, fn {_, inst} -> inst.item_id == adena_id end) do
+      nil ->
+        {:reply, {:error, :not_found}, state}
+
+      {inst_id, inst} ->
+        current = inst.count || 0
+
+        if current < amount do
+          {:reply, {:error, :insufficient_adena}, state}
+        else
+          new_count = current - amount
+          updated_inst = %{inst | count: new_count}
+          new_items = Map.put(state.items, inst_id, updated_inst)
+          db_item = Repo.get!(Item, inst_id)
+          Repo.update!(Ecto.Changeset.change(db_item, count: new_count))
+          {:reply, :ok, %{state | items: new_items}}
+        end
+    end
+  end
+
   def handle_call({:remove_item, item_instance_id, count}, _from, state) do
     case Map.get(state.items, item_instance_id) do
       nil ->
@@ -195,6 +232,22 @@ defmodule L2E.Inventory do
             new_items = Map.delete(state.items, item_instance_id)
             {:reply, {:ok, :removed, {instance, template}}, %{state | items: new_items}}
         end
+    end
+  end
+
+  def handle_call({:update_enchant, object_id, enchant_level}, _from, state) do
+    case Map.get(state.items, object_id) do
+      nil ->
+        {:reply, :ok, state}
+
+      instance ->
+        Repo.update_all(from(i in Item, where: i.id == ^object_id),
+          set: [enchant_level: enchant_level]
+        )
+
+        updated = %{instance | enchant_level: enchant_level}
+        new_items = Map.put(state.items, object_id, updated)
+        {:reply, :ok, %{state | items: new_items}}
     end
   end
 
