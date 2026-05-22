@@ -421,17 +421,22 @@ L2E:      1.0   2.0   3.9   7.8   15.4  (near-linear)
 | M49 – Skill Effects (CC / DoT / Charge / Toggle) | New `effect_type` variants: `:stun` / `:root` (CC with MEN-based resist check via `Effect.check_cc_lands?/2`), `:dot_hp` (HP damage-over-time ticks via `Effect.dot_tick_damage/2`), `:charge` (Gladiator Momentum stacks, max 10), `:toggle` (MP-drain skills with per-tick timer); `cc_state / dots / charge_count / toggle_skills` in `PlayerSession` state; CC guards block movement/attack/cast; `NPC.Instance.apply_cc/3` + `apply_dot/5` public API with stun blocking on `auto_attack_tick` |
 | M50 – Quest DSL + Scripts | `L2E.Quest.Engine` behaviour macro; `L2E.Quest.Registry` ETS GenServer auto-registering quest modules; `L2E.Quest.Handler` dispatcher (`dispatch_kill/3`, `dispatch_talk/4`); `PlayerSession` hooks: `{:npc_killed_for_quest, template_id}` cast + `"Quest "` bypass prefix; 3 quest scripts: `NewAdventurer` (q.255, Newbie Guide, level-5 gate), `ExplorationOfGiantsCave` (q.213, kill 10 Cave Servants), `PathOfWarrior` (q.211, Human Fighter class-change pre-quest) |
 | M51 – Data Tables (Henna / Recipe / Augmentation) | `L2E.Data.HennaTable` ETS GenServer (8 hennas: Lion→Princess; `get/1`, `get_all/0`, `get_dye_for_item/1`); `L2E.Data.RecipeTable` ETS GenServer (6 recipes; `get/1`, `get_for_item/1`, `get_common_recipes/0`); `L2E.Data.OptionTable` ETS GenServer for Life Stone augmentation options (8 options across :low/:mid/:top/:ancient grades; `get/1`, `get_random_option/1`); all three added to supervision tree |
+| M52 – SpawnData Loader | `L2E.NPC.SpawnTable` GenServer; loads spawn XML from `L2J_Mobius_CT_0_Interlude/dist/game/data/spawns/` with hardcoded Talking Island fallback (12 NPCs/monsters at real Interlude coords); NPC respawn scheduling via `{:npc_died, object_id, …}` messages; `admin_spawn/4` public API; added to application supervision tree |
+| M53 – NPC Hate List | `hate_map: %{}` in `NPC.Instance` state; `add_hate/3` public API (`GenServer.cast`); combat entry on `{:broadcast, :player_entered}` + `take_damage`; `select_top_hated/2` filters dead pids and returns highest-hate target; `player_left` removes player from hate map and recomputes target; `PlayerSession.start_auto_attack/1` calls `NPC.Instance.add_hate` on each attack |
+| M54 – Shortcut Bar | `character_shortcuts` DB table + `L2E.DB.CharacterShortcut` Ecto schema; `RequestShortcutReg` (0x33) / `RequestShortcutDel` (0x35) client packets; `ShortcutInit` (0x45) sent on world entry with all persisted shortcuts; `ShortcutRegister` (0x44) confirms slot registration; shortcuts persisted per `{char_id, slot, page}` unique key |
+| M56 – Henna / Recipe / Augmentation handlers | `RequestHennaEquip` (0xBC) consumes `dye_count` dye items from inventory, fills slot 1–3, persists `henna1/2/3` to DB; `RequestHennaRemove` (0xBF) returns `cancel_fee` dye items, clears slot; `RequestRecipeItemMakeSelf` (0xAF) validates all ingredients in inventory, deducts them, credits result item; `RequestConfirmRefinerItem` (0xD0/0x2A) + `RequestRefine` (0xD0/0x2C) rolls random `OptionTable` augmentation option and sends result; server packets: `RecipeItemMakeInfo` (0xD7), `HennaInfo` (0xE4), `ExVariationResult` (0xFE/0x55); `hennas` field in `PlayerSession` state loaded from DB on char select |
+| M57 – XP / Stats data | `L2E.Data.ExperienceTable` pure module (levels 1–85, cumulative XP thresholds); non-linear HP/MP polynomial growth in `Stats.compute/2` (`max_hp = base × (1 + lvl×0.07 + lvl^1.5×0.01)`); `xp_to_next_level/1` delegates to `ExperienceTable` delta |
+| M59 – AutoAttack / MoveToPawn / ActionUse packets | `AutoAttackStart` (0x2B) / `AutoAttackStop` (0x2C) server packets sent on attack start/stop; `MoveToPawn` (0x60) for NPC chase movement; `RequestActionUse` (0x45) client packet: action 0 → auto-attack toggle (peace-zone gated), action 2 → sit/stand no-op stub |
 
 ### Next
 
 | Milestone | Description |
 |-----------|-------------|
-| M52 – Real geodata | Parse `.l2j` / binary geodata files into ETS; replace permissive stubs with actual NSWE passability checks and height map lookups |
-| M53 – Olympiad | Match registration, 1v1 arena instance, score tracking, `OlympiadManager` GenServer |
-| M54 – Siege system | Castle siege zone lifecycle, siege flag placement, attacker/defender clan logic, siege scheduler, `SiegeSupervisor` isolated subtree |
-| M55 – Grand Bosses | Boss spawn tables, respawn window tracking, epic jewelry drops, world-announce on death |
-| M56 – Pets & Summons | Pet `GenServer` linked to owner session; summon skill → spawn pet NPC; feed / unsummon; pet stats from `PetDataTable` |
-| M57 – Augmentation gameplay | Henna engraving handler (3 slots, stat bonus in paperdoll); `RequestRecipeItemMakeSelf` crafting flow; `RequestConfirmTargetItem` + `RequestRefineItem` Life Stone augmentation applying `OptionTable` results to `ItemInstance` |
+| M55 – Real Geodata | Parse `.l2j` binary geodata files into ETS; NSWE passability bitmask checks; height map lookup; replace permissive stubs in `L2E.Geodata` with actual LOS and movement validation |
+| M58 – Siege system | Castle siege zone lifecycle, siege flag placement, attacker/defender clan logic, siege scheduler, `SiegeSupervisor` isolated subtree |
+| M60 – Olympiad | Match registration, 1v1 arena instance, score tracking, `OlympiadManager` GenServer |
+| M61 – Grand Bosses | Boss spawn tables, respawn window tracking, epic jewelry drops, world-announce on death |
+| M62 – Pets & Summons | Pet `GenServer` linked to owner session; summon skill → spawn pet NPC; feed / unsummon; pet stats from `PetDataTable` |
 
 ---
 
