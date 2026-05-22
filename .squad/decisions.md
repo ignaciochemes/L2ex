@@ -199,6 +199,61 @@ Pattern follows existing `SkillLearnTable` / `ClassAdvancementTable` (hardcoded 
 
 ---
 
+### [2026-05-22] FASE 3 OTP Module Foundation (Bishop)
+
+**What:** Created OTP trees for M69 (Duel.Manager + Duel.Session + Duel.Supervisor), M70 (Olympiad.Manager + Olympiad.Supervisor), M72 (Pet.Session + Pet.Supervisor), M71 (Siege.Manager + Siege.Supervisor + Siege.Castle). Also M68 SubclassData. All event-driven, no polling.
+**Why:** FASE 3 endgame system foundations. Dallas integrates into player_session.ex + application.ex.
+
+**Modules added to supervision tree:**
+- `{Registry, keys: :unique, name: L2E.Duel.Registry}`
+- `L2E.Duel.Manager`
+- `L2E.Duel.Supervisor`
+- `L2E.Olympiad.Supervisor` (contains Olympiad.Manager)
+- `L2E.Pet.Supervisor`
+- `L2E.Siege.Supervisor` (contains Siege.Manager)
+- `L2E.Data.SubclassData`
+
+---
+
+### [2026-05-22] FASE 3 Server Packets Added to packets.ex (Lambert)
+
+**What:** Added 11 new server packet modules to `lib/l2e/packet/server/packets.ex`.
+
+| Module | Opcode | Java Source |
+|--------|--------|-------------|
+| `L2E.Packet.Server.FriendList` | 0xFA | `FriendList.java` |
+| `L2E.Packet.Server.L2Friend` | 0xFB | `FriendPacket.java` |
+| `L2E.Packet.Server.FriendStatusPacket` | 0xFC | `FriendStatusPacket.java` |
+| `L2E.Packet.Server.FriendRecvMsg` | 0xFD | `L2FriendSay.java` |
+| `L2E.Packet.Server.PetInfo` | 0xB1 | `PetInfo.java` |
+| `L2E.Packet.Server.SiegeInfo` | 0xC9 | `SiegeInfo.java` |
+| `L2E.Packet.Server.ExDuelAskStart` | 0xFE/0x4B | `ExDuelAskStart.java` |
+| `L2E.Packet.Server.ExDuelReady` | 0xFE/0x4C | `ExDuelReady.java` |
+| `L2E.Packet.Server.ExDuelStart` | 0xFE/0x4D | `ExDuelStart.java` |
+| `L2E.Packet.Server.ExDuelEnd` | 0xFE/0x4E | `ExDuelEnd.java` |
+| `L2E.Packet.Server.ExOlympiadMode` | 0xFE/0x2B | `ExOlympiadMode.java` |
+
+**D1 — `L2Friend` opcode is 0xFB, not 0xFA**
+`FriendPacket.java` calls `ServerPackets.FRIEND_LIST.writeId` (0xFA) but `ServerPackets.java` enum has a distinct `L2_FRIEND(0xFB)`. 0xFB is correct for add/remove notification.
+
+**D2 — PetInfo fly speeds written twice (wire protocol quirk)**
+`PetInfo.java` writes `_flyRunSpd` and `_flyWalkSpd` twice in sequence. Reproduced exactly to match the wire protocol.
+
+**D3 — ExDuelReady / ExDuelStart / ExDuelEnd encode one int**
+All three Java classes write exactly one int (`_partyDuel` cast to int). Field `party_duel` accepts boolean or integer; truthy → 1.
+
+**D4 — ExOlympiadMode encodes mode as single byte (::8)**
+Java uses `writeByte`, not `writeInt`.
+
+---
+
+### [2026-05-22] M68 Sub-class DB Schema (Parker)
+
+**What:** Created `character_subclasses` table. `class_index` 1-3 for sub-classes; base class (0) not stored — base `class_id` lives on the character row. `exp`/`sp` stored as bigint. save/load/add/remove functions on `L2E.DB.CharacterSubclass`.
+**Why:** M68 milestone — sub-class system foundation.
+
+---
+
 ### [2026-05-22] M60 + M61 + RelationChanged Server Packets (Lambert)
 
 **D1 — Four server packet modules added after `ExVariationResult`**
