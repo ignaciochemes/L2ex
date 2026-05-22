@@ -41,6 +41,7 @@ defmodule L2E.Session.PlayerSession do
   alias L2E.Data.ClassAdvancementTable
   alias L2E.DB.CharacterSkill
   alias L2E.DB.CharacterQuest
+  alias L2E.DB.CharacterShortcut
 
   # Respawn delay after death (ms)
   @respawn_ms 30_000
@@ -171,7 +172,11 @@ defmodule L2E.Session.PlayerSession do
       # M49: Charge count (Gladiator Momentum, etc.)
       charge_count: 0,
       # M49: Active toggle skills — %{skill_id => timer_ref}
-      toggle_skills: %{}
+      toggle_skills: %{},
+      # M54: Shortcut bar — list of %{slot, page, type, shortcut_id, level}
+      shortcuts: [],
+      # M56: Henna/tattoo slots — %{1..3 => henna_id | nil}
+      hennas: %{1 => nil, 2 => nil, 3 => nil}
     }
 
     {:ok, state}
@@ -525,7 +530,14 @@ defmodule L2E.Session.PlayerSession do
   # M49: Apply DoT to this player
   def handle_cast({:apply_dot, skill_id, _level, damage_per_tick, tick_ms, ticks_left}, state) do
     if ref = Map.get(state.dots, skill_id), do: Process.cancel_timer(ref)
-    timer = Process.send_after(self(), {:dot_tick, skill_id, damage_per_tick, tick_ms, ticks_left}, tick_ms)
+
+    timer =
+      Process.send_after(
+        self(),
+        {:dot_tick, skill_id, damage_per_tick, tick_ms, ticks_left},
+        tick_ms
+      )
+
     {:noreply, %{state | dots: Map.put(state.dots, skill_id, timer)}}
   end
 
@@ -856,7 +868,16 @@ defmodule L2E.Session.PlayerSession do
               tick_ms = Map.get(template.stat_bonus, :tick_ms, 3_000)
               tick_count = Map.get(template.stat_bonus, :tick_count, 10)
               damage_per_tick = Effect.dot_tick_damage(caster_stats, template.power)
-              apply_dot_to_target(target_id, skill_id, level, damage_per_tick, tick_ms, tick_count, state)
+
+              apply_dot_to_target(
+                target_id,
+                skill_id,
+                level,
+                damage_per_tick,
+                tick_ms,
+                tick_count,
+                state
+              )
 
               %{state | mp: new_mp, cooldowns: new_cooldowns, casting: false, cast_timer: nil}
 
@@ -1000,9 +1021,16 @@ defmodule L2E.Session.PlayerSession do
   end
 
   # M49: DoT tick fires
-  def handle_info({:dot_tick, skill_id, damage_per_tick, tick_ms, ticks_left}, %{dead: false} = state) do
+  def handle_info(
+        {:dot_tick, skill_id, damage_per_tick, tick_ms, ticks_left},
+        %{dead: false} = state
+      ) do
     new_hp = max(0.0, state.hp - damage_per_tick)
-    send(state.conn_pid, {:send_packet, Server.StatusUpdate.hp_mp(state.char_id, new_hp, state.mp)})
+
+    send(
+      state.conn_pid,
+      {:send_packet, Server.StatusUpdate.hp_mp(state.char_id, new_hp, state.mp)}
+    )
 
     new_dots =
       if ticks_left > 1 do
@@ -1027,7 +1055,15 @@ defmodule L2E.Session.PlayerSession do
       Process.send_after(self(), :respawn, 30_000)
 
       {:noreply,
-       %{state | hp: 0.0, dead: true, attacking: false, attack_timer: nil, regen_timer: nil, dots: new_dots}}
+       %{
+         state
+         | hp: 0.0,
+           dead: true,
+           attacking: false,
+           attack_timer: nil,
+           regen_timer: nil,
+           dots: new_dots
+       }}
     else
       {:noreply, %{state | hp: new_hp, dots: new_dots}}
     end
@@ -1042,12 +1078,21 @@ defmodule L2E.Session.PlayerSession do
         new_buffs = Enum.reject(state.buffs, &(&1.skill_id == skill_id))
         abn = %Server.AbnormalStatusUpdate{effects: new_buffs}
         send(state.conn_pid, {:send_packet, abn})
-        {:noreply, %{state | toggle_skills: Map.delete(state.toggle_skills, skill_id), buffs: new_buffs}}
+
+        {:noreply,
+         %{state | toggle_skills: Map.delete(state.toggle_skills, skill_id), buffs: new_buffs}}
       else
         new_mp = state.mp - mp_cost_per_tick
-        send(state.conn_pid, {:send_packet, Server.StatusUpdate.hp_mp(state.char_id, state.hp, new_mp)})
+
+        send(
+          state.conn_pid,
+          {:send_packet, Server.StatusUpdate.hp_mp(state.char_id, state.hp, new_mp)}
+        )
+
         timer = Process.send_after(self(), {:toggle_tick, skill_id, mp_cost_per_tick}, 2_000)
-        {:noreply, %{state | mp: new_mp, toggle_skills: Map.put(state.toggle_skills, skill_id, timer)}}
+
+        {:noreply,
+         %{state | mp: new_mp, toggle_skills: Map.put(state.toggle_skills, skill_id, timer)}}
       end
     else
       {:noreply, state}
@@ -1289,7 +1334,12 @@ defmodule L2E.Session.PlayerSession do
             karma: Map.get(char, :karma, 0),
             pvp_kills: Map.get(char, :pvp_kills, 0),
             pk_kills: Map.get(char, :pk_kills, 0),
-            auth_state: :char_selected
+            auth_state: :char_selected,
+            hennas: %{
+              1 => char.henna1,
+              2 => char.henna2,
+              3 => char.henna3
+            }
         }
 
         selected = %Server.CharSelected{
@@ -1394,6 +1444,11 @@ defmodule L2E.Session.PlayerSession do
     regen_timer = Process.send_after(self(), :regen_tick, 3_000)
     save_timer = Process.send_after(self(), :auto_save, 300_000)
 
+    # M54: Load shortcuts from DB and send ShortcutInit
+    shortcuts = load_char_shortcuts(char_id)
+    shortcut_init = %Server.ShortcutInit{shortcuts: shortcuts}
+    send(state.conn_pid, {:send_packet, shortcut_init})
+
     Logger.info(
       "[PlayerSession] #{char_name} (id=#{char_id}) entered the world (class=#{state.class_id}, level=#{state.level})"
     )
@@ -1404,6 +1459,7 @@ defmodule L2E.Session.PlayerSession do
        | region_pid: region_pid,
          skills: skills,
          quests: quests,
+         shortcuts: shortcuts,
          regen_timer: regen_timer,
          save_timer: save_timer
      }}
@@ -1574,7 +1630,228 @@ defmodule L2E.Session.PlayerSession do
     {:noreply, %{state | target_id: nil, attacking: false, attack_timer: nil}}
   end
 
-  # ---- UseItem (0x19) — equip/consume an item ----------------------------
+  # ---- M54: RequestShortcutReg (0x33) — register a shortcut --------------
+
+  defp handle_packet(
+         %L2E.Packet.Client.RequestShortcutReg{
+           type: type,
+           slot: slot,
+           page: page,
+           shortcut_id: sc_id,
+           level: level
+         },
+         %{auth_state: :in_world} = state
+       )
+       when page in 0..9 do
+    effective_level =
+      if type == 1,
+        do: Map.get(state.skills, sc_id, level),
+        else: level
+
+    CharacterShortcut.upsert(state.char_id, slot, page, type, sc_id, effective_level)
+
+    sc = %{type: type, slot: slot, page: page, shortcut_id: sc_id, level: effective_level}
+
+    new_shortcuts =
+      Enum.reject(state.shortcuts, fn s -> s.slot == slot and s.page == page end)
+
+    send(
+      state.conn_pid,
+      {:send_packet,
+       %Server.ShortcutRegister{
+         type: type,
+         slot: slot,
+         page: page,
+         shortcut_id: sc_id,
+         level: effective_level
+       }}
+    )
+
+    {:noreply, %{state | shortcuts: [sc | new_shortcuts]}}
+  end
+
+  defp handle_packet(%L2E.Packet.Client.RequestShortcutReg{}, state), do: {:noreply, state}
+
+  # ---- M54: RequestShortcutDel (0x35) — delete a shortcut ----------------
+
+  defp handle_packet(
+         %L2E.Packet.Client.RequestShortcutDel{slot: slot, page: page},
+         %{auth_state: :in_world} = state
+       ) do
+    CharacterShortcut.delete(state.char_id, slot, page)
+
+    new_shortcuts =
+      Enum.reject(state.shortcuts, fn s -> s.slot == slot and s.page == page end)
+
+    {:noreply, %{state | shortcuts: new_shortcuts}}
+  end
+
+  # ---- M59: RequestActionUse (0x45) — action bar slot activated ----------
+
+  defp handle_packet(
+         %L2E.Packet.Client.RequestActionUse{action_id: 0},
+         %{auth_state: :in_world, target_id: target_id} = state
+       )
+       when not is_nil(target_id) do
+    if state.zone_type == :peace do
+      {:noreply, state}
+    else
+      {:noreply, start_auto_attack(state)}
+    end
+  end
+
+  defp handle_packet(
+         %L2E.Packet.Client.RequestActionUse{action_id: 2},
+         %{auth_state: :in_world} = state
+       ) do
+    Logger.debug("[PlayerSession] #{state.char_name} sit/stand toggle (no-op until ChangeWaitType)")
+    {:noreply, state}
+  end
+
+  defp handle_packet(%L2E.Packet.Client.RequestActionUse{}, state), do: {:noreply, state}
+
+  # ---- M56: RequestHennaEquip (0xBC) — equip a dye/tattoo ----------------
+
+  defp handle_packet(
+         %L2E.Packet.Client.RequestHennaEquip{dye_id: dye_id},
+         %{auth_state: :in_world} = state
+       ) do
+    case L2E.Data.HennaTable.get_dye_for_item(dye_id) do
+      nil ->
+        {:noreply, state}
+
+      henna ->
+        slot = Enum.find_value(1..3, fn s -> if Map.get(state.hennas, s) == nil, do: s end)
+
+        if slot do
+          items = Inventory.get_items(state.char_id)
+
+          case Enum.find(items, fn {inst, _} -> inst.item_id == henna.dye_id end) do
+            {inst, _} when inst.count >= henna.dye_count ->
+              Inventory.remove_item(state.char_id, inst.id, henna.dye_count)
+              new_hennas = Map.put(state.hennas, slot, henna.henna_id)
+              update_henna_in_db(state.char_id, new_hennas)
+              send(state.conn_pid, {:send_packet, build_henna_info_packet(new_hennas)})
+              {:noreply, %{state | hennas: new_hennas}}
+
+            _ ->
+              {:noreply, state}
+          end
+        else
+          {:noreply, state}
+        end
+    end
+  end
+
+  # ---- M56: RequestHennaRemove (0xBF) — remove a dye/tattoo --------------
+
+  defp handle_packet(
+         %L2E.Packet.Client.RequestHennaRemove{dye_id: dye_id},
+         %{auth_state: :in_world} = state
+       ) do
+    slot =
+      Enum.find_value(1..3, fn s ->
+        hid = Map.get(state.hennas, s)
+
+        if hid do
+          henna = L2E.Data.HennaTable.get(hid)
+          if henna && henna.dye_id == dye_id, do: s
+        end
+      end)
+
+    if slot do
+      henna = L2E.Data.HennaTable.get(Map.get(state.hennas, slot))
+      Inventory.add_item(state.char_id, henna.dye_id, henna.cancel_fee)
+      new_hennas = Map.put(state.hennas, slot, nil)
+      update_henna_in_db(state.char_id, new_hennas)
+      send(state.conn_pid, {:send_packet, build_henna_info_packet(new_hennas)})
+      {:noreply, %{state | hennas: new_hennas}}
+    else
+      {:noreply, state}
+    end
+  end
+
+  # ---- M56: RequestRecipeItemMakeSelf (0xAF) — craft via self recipe ------
+
+  defp handle_packet(
+         %L2E.Packet.Client.RequestRecipeItemMakeSelf{recipe_id: recipe_id},
+         %{auth_state: :in_world} = state
+       ) do
+    case L2E.Data.RecipeTable.get(recipe_id) do
+      nil ->
+        {:noreply, state}
+
+      recipe ->
+        items = Inventory.get_items(state.char_id)
+
+        result =
+          Enum.reduce_while(recipe.ingredients, :ok, fn %{item_id: iid, count: qty}, _ ->
+            case Enum.find(items, fn {inst, _} -> inst.item_id == iid end) do
+              {inst, _} when inst.count >= qty -> {:cont, :ok}
+              _ -> {:halt, :error}
+            end
+          end)
+
+        case result do
+          :ok ->
+            Enum.each(recipe.ingredients, fn %{item_id: iid, count: qty} ->
+              {inst, _} = Enum.find(items, fn {i, _} -> i.item_id == iid end)
+              Inventory.remove_item(state.char_id, inst.id, qty)
+            end)
+
+            Inventory.add_item(state.char_id, recipe.item_id, recipe.count)
+
+            pkt = %Server.RecipeItemMakeInfo{
+              recipe_id: recipe_id,
+              current_mp: round(state.mp),
+              max_mp: round(state.max_mp),
+              success: true,
+              is_common: Map.get(recipe, :is_common, false)
+            }
+
+            send(state.conn_pid, {:send_packet, pkt})
+
+          :error ->
+            pkt = %Server.RecipeItemMakeInfo{
+              recipe_id: recipe_id,
+              current_mp: round(state.mp),
+              max_mp: round(state.max_mp),
+              success: false,
+              is_common: Map.get(recipe, :is_common, false)
+            }
+
+            send(state.conn_pid, {:send_packet, pkt})
+        end
+
+        {:noreply, state}
+    end
+  end
+
+  # ---- M56: RequestConfirmRefinerItem (0xD0/0x2A) — validate life stone ---
+
+  defp handle_packet(%L2E.Packet.Client.RequestConfirmRefinerItem{}, state) do
+    # Client validation step — acknowledge with no extra state change.
+    {:noreply, state}
+  end
+
+  # ---- M56: RequestRefine (0xD0/0x2C) — augment weapon with life stone ----
+
+  defp handle_packet(
+         %L2E.Packet.Client.RequestRefine{},
+         %{auth_state: :in_world} = state
+       ) do
+    option = L2E.Data.OptionTable.get_random_option(:low)
+    aug_id = if option, do: option.option_id, else: 0
+
+    pkt = %Server.ExVariationResult{
+      stat12: aug_id,
+      stat34: 0,
+      result: if(option, do: 1, else: 0)
+    }
+
+    send(state.conn_pid, {:send_packet, pkt})
+    {:noreply, state}
+  end
 
   defp handle_packet(
          %L2E.Packet.Client.UseItem{object_id: obj_id},
@@ -2863,6 +3140,11 @@ defmodule L2E.Session.PlayerSession do
 
   defp start_auto_attack(state) do
     cancel_timer(state.attack_timer)
+
+    if npc_pid = find_npc_pid(state.target_id) do
+      L2E.NPC.Instance.add_hate(npc_pid, self(), 1)
+    end
+
     timer = schedule_attack(state)
     %{state | attacking: true, attack_timer: timer}
   end
@@ -3232,10 +3514,14 @@ defmodule L2E.Session.PlayerSession do
                   )
 
                 if html do
-                  send(state.conn_pid, {:send_packet, %Server.NpcHtmlMessage{
-                    npc_object_id: state.target_id || 0,
-                    html: html
-                  }})
+                  send(
+                    state.conn_pid,
+                    {:send_packet,
+                     %Server.NpcHtmlMessage{
+                       npc_object_id: state.target_id || 0,
+                       html: html
+                     }}
+                  )
                 end
 
                 {:noreply, %{state | quests: new_quests}}
@@ -3611,6 +3897,60 @@ defmodule L2E.Session.PlayerSession do
   end
 
   # M47: Load all quest rows for this character into the in-memory quests map.
+  defp load_char_shortcuts(char_id) do
+    L2E.DB.CharacterShortcut.load_for_character(char_id)
+  end
+
+  # M56: Persist henna slot changes to the characters table.
+  defp update_henna_in_db(char_id, hennas) do
+    Repo.update_all(
+      from(c in Character, where: c.id == ^char_id),
+      set: [
+        henna1: Map.get(hennas, 1),
+        henna2: Map.get(hennas, 2),
+        henna3: Map.get(hennas, 3)
+      ]
+    )
+  end
+
+  # M56: Build a HennaInfo server packet from the current henna slot map.
+  defp build_henna_info_packet(hennas) do
+    henna_list =
+      Enum.flat_map(1..3, fn slot ->
+        case Map.get(hennas, slot) do
+          nil -> []
+          hid -> [L2E.Data.HennaTable.get(hid)]
+        end
+      end)
+      |> Enum.filter(& &1)
+
+    {int_bonus, str_bonus, con_bonus, men_bonus, dex_bonus, wit_bonus} =
+      Enum.reduce(henna_list, {0, 0, 0, 0, 0, 0}, fn h, {i, s, c, m, d, w} ->
+        sb = Map.get(h.stat_bonus, :str, 0)
+        db = Map.get(h.stat_bonus, :dex, 0)
+        cb = Map.get(h.stat_bonus, :con, 0)
+        ib = Map.get(h.stat_bonus, :int, 0)
+        wb = Map.get(h.stat_bonus, :wit, 0)
+        mb = Map.get(h.stat_bonus, :men, 0)
+        {i + ib, s + sb, c + cb, m + mb, d + db, w + wb}
+      end)
+
+    entries =
+      Enum.map(henna_list, fn h ->
+        %{henna_id: h.henna_id, dye_id: h.dye_id}
+      end)
+
+    %Server.HennaInfo{
+      int_bonus: int_bonus,
+      str_bonus: str_bonus,
+      con_bonus: con_bonus,
+      men_bonus: men_bonus,
+      dex_bonus: dex_bonus,
+      wit_bonus: wit_bonus,
+      hennas: entries
+    }
+  end
+
   defp load_char_quests(char_id) do
     CharacterQuest.load_for_character(char_id)
     |> Enum.into(%{}, fn q ->
@@ -3697,12 +4037,23 @@ defmodule L2E.Session.PlayerSession do
   end
 
   # M49: Send DoT to target (NPC or player)
-  defp apply_dot_to_target(target_id, skill_id, level, damage_per_tick, tick_ms, ticks_left, state) do
+  defp apply_dot_to_target(
+         target_id,
+         skill_id,
+         level,
+         damage_per_tick,
+         tick_ms,
+         ticks_left,
+         state
+       ) do
     case find_npc_pid(target_id) do
       nil ->
         case Registry.lookup(L2E.Session.Registry, target_id) do
           [{pid, _}] ->
-            GenServer.cast(pid, {:apply_dot, skill_id, level, damage_per_tick, tick_ms, ticks_left})
+            GenServer.cast(
+              pid,
+              {:apply_dot, skill_id, level, damage_per_tick, tick_ms, ticks_left}
+            )
 
           [] ->
             :ok

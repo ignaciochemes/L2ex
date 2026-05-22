@@ -53,6 +53,18 @@
 - **`SocialAction` (0x5F) already existed** at line 723 of `server/packets.ex` — always grep before adding.
 - **Decoder `0x2C`** is already used by `RequestOustPartyMember` on the client side; `DoorStatusUpdate` (server-only 0x2C) does not conflict — server opcodes are in a separate namespace.
 
+### M53 — NPC Hate List / AggroInfo (2026-05-22)
+
+**Files modified:**
+- `lib/l2e/npc/instance.ex` — added `hate_map: %{}` to state type and init; added `add_hate/3` public API; replaced monolithic `take_damage` handler with hate-aware version that derives `target_pid` from `select_top_hated/2`; added `{:add_hate, ...}` cast handler; seeded hate_map=100 on aggressive aggro detection from `player_entered`; rewrote `player_left` to remove from hate_map and re-target top-hated instead of always dropping combat; `drop_target/1` and `handle_death/1` now both clear `hate_map: %{}`; added `select_top_hated/2` private helper (filters dead pids via `Process.alive?`); added backward-compat `{:take_damage, damage}` 2-arity clause.
+- `lib/l2e/session/player_session.ex` — added `L2E.NPC.Instance.add_hate(npc_pid, self(), 1)` in `start_auto_attack/1` for initial aggro on attack start (before first hit lands, in case of miss).
+
+**Approach:**
+- `hate_map` is a `%{pid => integer}` owned entirely by the NPC process — no shared state.
+- `target_pid` is a derived cache recomputed on every hate change via `select_top_hated/2`.
+- NPC stays in combat as long as any living player has nonzero hate; only drops to `:idle` when hate_map is empty.
+- `player_session.ex` `deal_damage_to_target` already called `take_damage/3` with `self()` from M49 — no change needed there.
+
 ### M43/M44 Fix + M45/M48 Packets (2026-05-22)
 
 - **Duplicate block removal**: `client/packets.ex` had a 153-line duplicate block — identified by opcode collision; removed via `replace_string_in_file` with full surrounding module context for uniqueness.

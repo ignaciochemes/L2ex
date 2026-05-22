@@ -23,6 +23,7 @@ defmodule L2E.Quest.Scripts.ExplorationOfGiantsCave do
       <a action="bypass -h npc_#{30516}_return">Not now.</a>
       </body></html>
       """
+
       {:ok, html}
     else
       html = """
@@ -31,6 +32,7 @@ defmodule L2E.Quest.Scripts.ExplorationOfGiantsCave do
       You need to be at least level #{min_level()} to help me. Come back when you're stronger.
       </body></html>
       """
+
       {:ok, html}
     end
   end
@@ -44,6 +46,7 @@ defmodule L2E.Quest.Scripts.ExplorationOfGiantsCave do
     <a action="bypass -h npc_#{30516}_return">Understood.</a>
     </body></html>
     """
+
     new_state = %{state: 1, cond: 1, count: 0, reward_taken: false}
     {:ok, html, new_state}
   end
@@ -56,6 +59,7 @@ defmodule L2E.Quest.Scripts.ExplorationOfGiantsCave do
     <a action="bypass -h npc_#{30516}_return">I'll continue.</a>
     </body></html>
     """
+
     {:ok, html, %{state: 1, cond: 1, count: 0, reward_taken: false}}
   end
 
@@ -67,6 +71,7 @@ defmodule L2E.Quest.Scripts.ExplorationOfGiantsCave do
     <a action="bypass Quest 30516 reward">Claim reward</a>
     </body></html>
     """
+
     {:ok, html, %{state: 2, cond: 2, count: 0, reward_taken: false}}
   end
 

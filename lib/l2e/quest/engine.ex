@@ -33,7 +33,12 @@ defmodule L2E.Quest.Engine do
 
       # Register this quest module in ETS when the module is loaded
       def child_spec(_opts),
-        do: %{id: __MODULE__, start: {__MODULE__, :register, []}, type: :worker, restart: :transient}
+        do: %{
+          id: __MODULE__,
+          start: {__MODULE__, :register, []},
+          type: :worker,
+          restart: :transient
+        }
 
       def register do
         L2E.Quest.Registry.register(__MODULE__)

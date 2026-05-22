@@ -70,6 +70,17 @@ Requested by Ignacio. Deep inventory of L2E vs L2J Mobius CT0 Interlude.
 
 ## Learnings
 
+### 2026-05-22 — Second Full Gap Analysis (M1–M42 confirmed baseline)
+
+- **Actual packet count from code:** 51 client modules, 64 server modules — not 86/66 as estimated in previous session. The difference is ~35 packets that exist in plans but not yet in the file system.
+- **Geodata remains the single highest architectural risk.** `can_see?/2` always returns `true`. Every AOI scoping decision, every aggro check, every ranged attack is running on false assumptions. Fixing this requires parsing `.l2j` binary format into ETS blocks — no shortcuts.
+- **Data tables are at 10/43 (~23%).** The missing high-impact ones are: ExperienceData (XP curve at each level), PlayerTemplateData per level (stat tables), MultisellData (multisell NPC dialogs), MapRegionData (town identification), SpawnData (mass NPC population). Without SpawnData, the world is empty except for manual spawn calls.
+- **Zone types: 5 concept-mappings out of 30 L2J types.** Missing RespawnZone (rebirth points), DamageZone (swamp/poison ground), FishingZone, JailZone, TownZone (for proper town rules), OlympiadStadiumZone.
+- **Henna/Recipe/Augmentation: data tables loaded, UI flow 0%.** Three systems are "data-ready" but have no packet handlers for the actual player interaction (equip/remove/craft/augment). These are quick wins — 1-2 days each to complete.
+- **Quest engine DSL is correct OTP.** 3 scripts vs 500+ in L2J. The blocker is content, not architecture. Need to prioritize populating quests in parallel with other work.
+- **NPC AI hate list is single `target_pid`.** L2J uses a ranked `Map<Creature, Integer>` (hate values). Without this, NPCs always attack whoever last hit them, ignore taunts, and can't switch targets correctly. Hate list is M43 and should be considered a prerequisite for any content testing.
+- **Overall honest coverage: ~38%** — functional for basic gameplay loop (login → move → fight → trade → level up) but missing all endgame systems, most content, and many quality-of-life features.
+
 ### 2026-05-22 — M46 Geodata stub + M48 Instance Zones
 - `L2E.Config` does not exist in this codebase — use `Application.get_env(:l2e, key, default)` for runtime config values.
 - Existing `do_teleport/2` private helper in `player_session.ex` handles region handoff correctly — reuse it for instance eject rather than duplicating teleport logic.

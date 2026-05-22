@@ -83,3 +83,17 @@
 - Created `lib/l2e/data/option_table.ex` — ETS `:option_table`; 8 hardcoded augmentation options; `get/1`, `get_random_option/1` (grade → id range)
 - Modified `lib/l2e/application.ex` — added `L2E.Data.HennaTable`, `L2E.Data.RecipeTable`, `L2E.Data.OptionTable` after `ClassAdvancementTable`
 - Pattern: no XML loading, no Ecto, no DB tables — pure ETS with hardcoded seed data, same as SkillLearnTable
+
+## M52 — SpawnData Loader (2026-05-22)
+
+- `lib/l2e/npc/spawn_table.ex` already existed and loaded from XML — not replaced, only enhanced
+- Added hardcoded Talking Island fallback to `NPC.SpawnTable.load_spawn_defs/0` — used only when XML spawn files resolve to zero entries
+- Added `spawn_npc/5` (positional convenience function) to `lib/l2e/npc/supervisor.ex` — does template lookup + auto-generates object_id via `:erlang.unique_integer([:positive, :monotonic]) + 100_000`; existing `spawn_npc/1` opts variant preserved
+
+## M57 — ExperienceData + PlayerTemplateData (2026-05-22)
+
+- Created `lib/l2e/data/experience_table.ex` — pure compile-time module (no GenServer); 85-level XP table built into `@xp_map` at compile time; `get_xp_for_level/1` and `max_level/0`
+- Modified `lib/l2e/game/stats.ex`:
+  - `max_hp/2` and `max_mp/2` now use non-linear polynomial growth via private `max_hp_at_level/2` and `max_mp_at_level/2` helpers; `hp_per_level` / `mp_per_level` template fields no longer needed by these functions
+  - `xp_to_next_level/1` now delegates to `ExperienceTable.get_xp_for_level/1` diff instead of the old cubic approximation
+- `application.ex` unchanged — ExperienceTable is a pure module, no supervision needed

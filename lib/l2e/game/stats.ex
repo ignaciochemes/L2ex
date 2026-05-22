@@ -49,13 +49,24 @@ defmodule L2E.Game.Stats do
   # -----------------------------------------------------------------------
 
   @spec max_hp(map(), pos_integer()) :: pos_integer()
-  def max_hp(%{base_hp: base, hp_per_level: growth}, level) do
-    round(base + growth * (level - 1))
+  def max_hp(%{base_hp: base}, level) do
+    max_hp_at_level(base, level)
   end
 
   @spec max_mp(map(), pos_integer()) :: pos_integer()
-  def max_mp(%{base_mp: base, mp_per_level: growth}, level) do
-    round(base + growth * (level - 1))
+  def max_mp(%{base_mp: base}, level) do
+    max_mp_at_level(base, level)
+  end
+
+  # Non-linear HP growth: polynomial curve matching L2 Interlude progression.
+  # At level 1 → ~1.08× base; level 40 → ~6.3× base; level 80 → ~13.8× base.
+  defp max_hp_at_level(base_hp, level) do
+    round(base_hp * (1 + level * 0.07 + :math.pow(level, 1.5) * 0.01))
+  end
+
+  # MP grows faster relative to base due to regen mechanics.
+  defp max_mp_at_level(base_mp, level) do
+    round(base_mp * (1 + level * 0.08))
   end
 
   @spec max_cp(map(), pos_integer()) :: pos_integer()
@@ -210,12 +221,12 @@ defmodule L2E.Game.Stats do
   Approximates the L2 Interlude experience table.
   Level 1 requires 0 XP. Level 2 requires 68, then grows roughly as level^3.
   """
-  @spec xp_to_next_level(pos_integer()) :: non_neg_integer()
+  @spec xp_to_next_level(pos_integer()) :: non_neg_integer() | :infinity
   def xp_to_next_level(level) when level >= 85, do: :infinity
   def xp_to_next_level(level) when level <= 1, do: 0
 
   def xp_to_next_level(level) do
-    # Approximate formula tuned against L2 Interlude XP table
-    round(:math.pow(level, 3.0) * 10 + :math.pow(level, 2.0) * 20)
+    alias L2E.Data.ExperienceTable
+    ExperienceTable.get_xp_for_level(level + 1) - ExperienceTable.get_xp_for_level(level)
   end
 end

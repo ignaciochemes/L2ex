@@ -21,6 +21,7 @@ defmodule L2E.Quest.Scripts.PathOfWarrior do
         Return when you have reached level #{min_level()}.
         </body></html>
         """
+
         {:ok, html}
 
       player.class_id != @required_class_id ->
@@ -30,6 +31,7 @@ defmodule L2E.Quest.Scripts.PathOfWarrior do
         The path of the Warrior is not for you. Only Human Fighters may seek this advancement.
         </body></html>
         """
+
         {:ok, html}
 
       true ->
@@ -42,6 +44,7 @@ defmodule L2E.Quest.Scripts.PathOfWarrior do
         <a action="bypass -h npc_#{30017}_return">Not yet.</a>
         </body></html>
         """
+
         {:ok, html}
     end
   end
@@ -55,6 +58,7 @@ defmodule L2E.Quest.Scripts.PathOfWarrior do
       Speak to me again to receive your advancement.
       </body></html>
       """
+
       new_state = %{state: 2, cond: 1, count: 0, reward_taken: false}
       {:ok, html, new_state}
     else

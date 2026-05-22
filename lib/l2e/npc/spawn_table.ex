@@ -120,8 +120,35 @@ defmodule L2E.NPC.SpawnTable do
 
   # Returns a list of {npc_id, x, y, z, heading, respawn_delay_ms}
   defp load_spawn_defs do
-    spawn_files()
-    |> Enum.flat_map(&load_file/1)
+    xml_defs = spawn_files() |> Enum.flat_map(&load_file/1)
+
+    if xml_defs == [] do
+      Logger.info("[SpawnTable] No XML spawn files found — using hardcoded Talking Island fallback")
+      hardcoded_spawn_defs()
+    else
+      xml_defs
+    end
+  end
+
+  # Fallback spawn list for Talking Island Village.
+  # Used only when no XML spawn files are present in the data directory.
+  defp hardcoded_spawn_defs do
+    [
+      # NPC Village
+      {30008, -84318, 243637, -3729, 0,      60_000},
+      {30006, -83826, 244043, -3729, 0,      60_000},
+      {30059, -82827, 242741, -3729, 0,      60_000},
+      {30131, -82943, 243087, -3729, 0,      60_000},
+      {30017, -83993, 243445, -3729, 0,      60_000},
+      # Monsters
+      {20446, -83568, 241898, -3729, 0,      30_000},
+      {20446, -84100, 241500, -3729, 0,      30_000},
+      {20446, -85000, 242000, -3729, 0,      30_000},
+      {20447, -86000, 243000, -3729, 0,      35_000},
+      {20447, -86500, 244000, -3729, 0,      35_000},
+      {20456, -87000, 244500, -3729, 0,      40_000},
+      {20456, -87500, 243500, -3729, 0,      40_000}
+    ]
   end
 
   defp load_file(path) do

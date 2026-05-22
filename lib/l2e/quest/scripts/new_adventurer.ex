@@ -21,6 +21,7 @@ defmodule L2E.Quest.Scripts.NewAdventurer do
       <a action="bypass -h npc_#{30008}_return">No, not yet.</a>
       </body></html>
       """
+
       {:ok, html}
     else
       :skip
@@ -37,6 +38,7 @@ defmodule L2E.Quest.Scripts.NewAdventurer do
     <a action="bypass -h npc_#{30008}_return">Understood.</a>
     </body></html>
     """
+
     new_state = %{state: 1, cond: 1, count: 0, reward_taken: false}
     {:ok, html, new_state}
   end
@@ -51,6 +53,7 @@ defmodule L2E.Quest.Scripts.NewAdventurer do
       <a action="bypass Quest 30008 reward">Claim reward</a>
       </body></html>
       """
+
       new_state = %{state: 2, cond: 2, count: 0, reward_taken: false}
       {:ok, html, new_state}
     else
@@ -61,6 +64,7 @@ defmodule L2E.Quest.Scripts.NewAdventurer do
       <a action="bypass -h npc_#{30008}_return">I'll be back.</a>
       </body></html>
       """
+
       {:ok, html, %{state: 1, cond: 1, count: 0, reward_taken: false}}
     end
   end

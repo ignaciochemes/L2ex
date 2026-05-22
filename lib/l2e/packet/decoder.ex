@@ -50,6 +50,8 @@ defmodule L2E.Packet.Decoder do
   def decode(0x16, body), do: Client.AddTradeItem.decode(body)
   def decode(0x17, body), do: Client.TradeDone.decode(body)
   def decode(0x44, body), do: Client.AnswerTradeRequest.decode(body)
+  # M59: RequestActionUse
+  def decode(0x45, body), do: Client.RequestActionUse.decode(body)
   def decode(0x19, body), do: Client.UseItem.decode(body)
   # M16: NPC interaction
   def decode(0x1E, body), do: Client.RequestSellItem.decode(body)
@@ -66,8 +68,11 @@ defmodule L2E.Packet.Decoder do
   def decode(0x2B, body), do: Client.RequestWithDrawalParty.decode(body)
   def decode(0x2C, body), do: Client.RequestOustPartyMember.decode(body)
   def decode(0x2F, body), do: Client.RequestMagicSkillUse.decode(body)
+  # M54: Shortcut bar
+  def decode(0x31, body), do: Client.RequestWarehouseDeposit.decode(body)
   def decode(0x32, body), do: Client.RequestWarehouseWithdraw.decode(body)
-  def decode(0x33, body), do: Client.RequestWarehouseDeposit.decode(body)
+  def decode(0x33, body), do: Client.RequestShortcutReg.decode(body)
+  def decode(0x35, body), do: Client.RequestShortcutDel.decode(body)
   def decode(0x37, body), do: Client.RequestTargetCanceld.decode(body)
   # M17: Chat
   def decode(0x38, body), do: Client.Say2.decode(body)
@@ -99,6 +104,11 @@ defmodule L2E.Packet.Decoder do
   # M45: Class advancement
   def decode(0xBA, body), do: Client.RequestGotoLobby.decode(body)
 
+  # M56: Henna / Recipe / Augmentation
+  def decode(0xAF, body), do: Client.RequestRecipeItemMakeSelf.decode(body)
+  def decode(0xBC, body), do: Client.RequestHennaEquip.decode(body)
+  def decode(0xBF, body), do: Client.RequestHennaRemove.decode(body)
+
   # ── Extended two-byte opcode space (0xD0 prefix) ────────────────────────────
   # Body starts with a little-endian 16-bit sub-opcode, then the real payload.
 
@@ -114,6 +124,10 @@ defmodule L2E.Packet.Decoder do
 
   # M39: Auto soulshot/spiritshot toggle
   defp decode_ext(0x05, body), do: Client.RequestAutoSoulShot.decode(body)
+
+  # M56: Augmentation — confirm life stone selection + perform augment
+  defp decode_ext(0x2A, body), do: Client.RequestConfirmRefinerItem.decode(body)
+  defp decode_ext(0x2C, body), do: Client.RequestRefine.decode(body)
 
   defp decode_ext(_sub, _body), do: {:error, :unknown_opcode}
 end

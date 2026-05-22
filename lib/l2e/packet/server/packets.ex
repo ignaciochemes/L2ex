@@ -2079,3 +2079,262 @@ defmodule L2E.Packet.Server.DoorStatusUpdate do
     <<@opcode::8, p.door_id::little-32, p.is_open::8>>
   end
 end
+
+defmodule L2E.Packet.Server.ShortcutInit do
+  @moduledoc """
+  Opcode 0x45 — sent on world entry with all registered shortcuts.
+
+  Binary layout (ShortcutInit.java):
+    count(32LE)
+    for each shortcut:
+      type(32LE)  page_slot(32LE)  then type-specific fields:
+        SKILL (1): skill_id(32) level(32) 0(8) 1(32)
+        ITEM  (2): item_id(32) 1(32) -1(32) 0(32) 0(32) 0(16) 0(16)
+        other    : id(32) 1(32)
+
+  Reference: ServerPackets.SHORT_CUT_INIT(0x45)
+  """
+  @behaviour L2E.Packet.Encodable
+
+  defstruct shortcuts: []
+  @type t :: %__MODULE__{}
+
+  @opcode 0x45
+
+  @impl L2E.Packet.Encodable
+  def encode(%__MODULE__{shortcuts: shortcuts}) do
+    count = length(shortcuts)
+    body = Enum.map_join(shortcuts, &encode_shortcut/1)
+    <<@opcode::8, count::little-32>> <> body
+  end
+
+  defp encode_shortcut(%{type: 1, slot: slot, page: page, shortcut_id: id, level: lvl}) do
+    page_slot = slot + page * 12
+    <<1::little-32, page_slot::little-32, id::little-32, lvl::little-32, 0::8, 1::little-32>>
+  end
+
+  defp encode_shortcut(%{type: 2, slot: slot, page: page, shortcut_id: id}) do
+    page_slot = slot + page * 12
+
+    <<2::little-32, page_slot::little-32, id::little-32, 1::little-32,
+      -1::little-32-signed, 0::little-32, 0::little-32, 0::little-16, 0::little-16>>
+  end
+
+  defp encode_shortcut(%{type: type, slot: slot, page: page, shortcut_id: id}) do
+    page_slot = slot + page * 12
+    <<type::little-32, page_slot::little-32, id::little-32, 1::little-32>>
+  end
+end
+
+defmodule L2E.Packet.Server.ShortcutRegister do
+  @moduledoc """
+  Opcode 0x44 — confirms a shortcut registration to the client.
+
+  Binary layout (ShortcutRegister.java):
+    type(32LE)  page_slot(32LE)  type-specific fields  1(32LE)
+
+  Reference: ServerPackets.SHORT_CUT_REGISTER(0x44)
+  """
+  @behaviour L2E.Packet.Encodable
+
+  defstruct [:type, :slot, :page, :shortcut_id, :level]
+  @type t :: %__MODULE__{}
+
+  @opcode 0x44
+
+  @impl L2E.Packet.Encodable
+  def encode(%__MODULE__{} = p) do
+    page_slot = p.slot + p.page * 12
+    type_body = encode_type_body(p)
+    <<@opcode::8, p.type::little-32, page_slot::little-32>> <> type_body <> <<1::little-32>>
+  end
+
+  defp encode_type_body(%{type: 1, shortcut_id: id, level: lvl}) do
+    <<id::little-32, lvl::little-32, 0::8>>
+  end
+
+  defp encode_type_body(%{shortcut_id: id}) do
+    <<id::little-32>>
+  end
+end
+
+defmodule L2E.Packet.Server.AutoAttackStart do
+  @moduledoc """
+  Opcode 0x2B — notifies client that an entity started auto-attacking.
+
+  Binary layout (AutoAttackStart.java): object_id(32LE)
+
+  Reference: ServerPackets.AUTO_ATTACK_START(0x2B)
+  """
+  @behaviour L2E.Packet.Encodable
+
+  defstruct [:object_id]
+  @type t :: %__MODULE__{}
+
+  @opcode 0x2B
+
+  @impl L2E.Packet.Encodable
+  def encode(%__MODULE__{object_id: id}) do
+    <<@opcode::8, id::little-32>>
+  end
+end
+
+defmodule L2E.Packet.Server.AutoAttackStop do
+  @moduledoc """
+  Opcode 0x2C — notifies client that an entity stopped auto-attacking.
+
+  Binary layout (AutoAttackStop.java): object_id(32LE)
+
+  Reference: ServerPackets.AUTO_ATTACK_STOP(0x2C)
+  """
+  @behaviour L2E.Packet.Encodable
+
+  defstruct [:object_id]
+  @type t :: %__MODULE__{}
+
+  @opcode 0x2C
+
+  @impl L2E.Packet.Encodable
+  def encode(%__MODULE__{object_id: id}) do
+    <<@opcode::8, id::little-32>>
+  end
+end
+
+defmodule L2E.Packet.Server.MoveToPawn do
+  @moduledoc """
+  Opcode 0x60 — entity is chasing a moving target (follow-type movement).
+
+  Binary layout (MoveToPawn.java):
+    follower_object_id(32) target_object_id(32) distance(32)
+    follower_x(32) follower_y(32) follower_z(32)
+    target_x(32) target_y(32) target_z(32)
+
+  Reference: ServerPackets.MOVE_TO_PAWN(0x60)
+  """
+  @behaviour L2E.Packet.Encodable
+
+  defstruct [
+    :follower_object_id,
+    :target_object_id,
+    :distance,
+    :follower_x,
+    :follower_y,
+    :follower_z,
+    :target_x,
+    :target_y,
+    :target_z
+  ]
+
+  @type t :: %__MODULE__{}
+
+  @opcode 0x60
+
+  @impl L2E.Packet.Encodable
+  def encode(%__MODULE__{} = p) do
+    <<@opcode::8, p.follower_object_id::little-32, p.target_object_id::little-32,
+      p.distance::little-32, p.follower_x::little-32-signed, p.follower_y::little-32-signed,
+      p.follower_z::little-32-signed, p.target_x::little-32-signed,
+      p.target_y::little-32-signed, p.target_z::little-32-signed>>
+  end
+end
+
+# ---------------------------------------------------------------------------
+# M56: RecipeItemMakeInfo (0xD7) — result of crafting via self-recipe
+#
+# Reference: RecipeItemMakeInfo.java
+# Binary layout:
+#   opcode(8), recipe_id(32LE), is_common(32LE), current_mp(32LE),
+#   max_mp(32LE), success(32LE)
+# ---------------------------------------------------------------------------
+defmodule L2E.Packet.Server.RecipeItemMakeInfo do
+  @moduledoc "Crafting result packet sent after RequestRecipeItemMakeSelf."
+
+  @behaviour L2E.Packet.Encodable
+
+  defstruct [:recipe_id, :current_mp, :max_mp, success: true, is_common: false]
+
+  @type t :: %__MODULE__{}
+
+  @opcode 0xD7
+
+  @impl L2E.Packet.Encodable
+  def encode(%__MODULE__{} = p) do
+    is_common = if p.is_common, do: 1, else: 0
+    success = if p.success, do: 1, else: 0
+
+    <<@opcode::8, p.recipe_id::little-32, is_common::little-32,
+      p.current_mp::little-32, p.max_mp::little-32, success::little-32>>
+  end
+end
+
+# ---------------------------------------------------------------------------
+# M56: HennaInfo (0xE4) — current henna (dye/tattoo) state
+#
+# Reference: HennaInfo.java
+# Binary layout:
+#   opcode(8)
+#   int_bonus(8s), str_bonus(8s), con_bonus(8s), men_bonus(8s),
+#   dex_bonus(8s), wit_bonus(8s)
+#   slots_count(32LE) = 3
+#   henna_count(32LE)
+#   For each henna: henna_id(32LE), dye_id(32LE), is_equipped(8=1)
+# ---------------------------------------------------------------------------
+defmodule L2E.Packet.Server.HennaInfo do
+  @moduledoc "Sends current henna slot state to the client."
+
+  @behaviour L2E.Packet.Encodable
+
+  defstruct [
+    int_bonus: 0,
+    str_bonus: 0,
+    con_bonus: 0,
+    men_bonus: 0,
+    dex_bonus: 0,
+    wit_bonus: 0,
+    hennas: []
+  ]
+
+  @type t :: %__MODULE__{}
+
+  @opcode 0xE4
+
+  @impl L2E.Packet.Encodable
+  def encode(%__MODULE__{} = p) do
+    henna_list = p.hennas || []
+    henna_count = length(henna_list)
+
+    henna_bytes =
+      Enum.reduce(henna_list, <<>>, fn h, acc ->
+        acc <> <<h.henna_id::little-32, h.dye_id::little-32, 1::8>>
+      end)
+
+    <<@opcode::8,
+      p.int_bonus::8-signed, p.str_bonus::8-signed, p.con_bonus::8-signed,
+      p.men_bonus::8-signed, p.dex_bonus::8-signed, p.wit_bonus::8-signed,
+      3::little-32, henna_count::little-32, henna_bytes::binary>>
+  end
+end
+
+# ---------------------------------------------------------------------------
+# M56: ExVariationResult (0xFE sub 0x0055) — augmentation result
+#
+# Reference: ExVariationResult.java
+# Binary layout:
+#   0xFE(8), 0x0055(16LE), stat12(32LE), stat34(32LE), result(32LE)
+#   result: 1 = success, 0 = fail
+# ---------------------------------------------------------------------------
+defmodule L2E.Packet.Server.ExVariationResult do
+  @moduledoc "Sent after RequestRefine (life stone augmentation)."
+
+  @behaviour L2E.Packet.Encodable
+
+  defstruct [stat12: 0, stat34: 0, result: 0]
+
+  @type t :: %__MODULE__{}
+
+  @impl L2E.Packet.Encodable
+  def encode(%__MODULE__{} = p) do
+    <<0xFE::8, 0x0055::little-16, p.stat12::little-32, p.stat34::little-32,
+      p.result::little-32>>
+  end
+end

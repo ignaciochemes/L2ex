@@ -49,6 +49,7 @@ defmodule L2E.NPC.Instance do
           spawn_pos: {integer(), integer(), integer()},
           hp: float(),
           ai_state: ai_state(),
+          hate_map: %{pid() => non_neg_integer()},
           target_pid: pid() | nil,
           target_id: pos_integer() | nil,
           region_pid: pid() | nil,
@@ -89,6 +90,11 @@ defmodule L2E.NPC.Instance do
     GenServer.call(npc_pid, :get_info)
   end
 
+  @doc "Add hate toward this NPC from a player process."
+  def add_hate(pid, player_pid, amount) do
+    GenServer.cast(pid, {:add_hate, player_pid, amount})
+  end
+
   # -----------------------------------------------------------------------
   # GenServer init
   # -----------------------------------------------------------------------
@@ -115,6 +121,7 @@ defmodule L2E.NPC.Instance do
       spawn_pos: position,
       hp: template.max_hp * 1.0,
       ai_state: :idle,
+      hate_map: %{},
       target_pid: nil,
       target_id: nil,
       region_pid: region_pid,
@@ -179,6 +186,8 @@ defmodule L2E.NPC.Instance do
   end
 
   def handle_cast({:take_damage, amount, from_pid}, state) do
+    new_hate = Map.update(state.hate_map, from_pid, amount, &(&1 + amount))
+    new_target = select_top_hated(new_hate, state)
     new_hp = max(0.0, state.hp - amount)
 
     Logger.debug(
@@ -186,16 +195,67 @@ defmodule L2E.NPC.Instance do
     )
 
     if new_hp <= 0 do
-      {:noreply, handle_death(state)}
+      {:noreply, handle_death(%{state | hate_map: new_hate})}
     else
-      new_state = %{state | hp: new_hp}
-      # Broadcast HP update so nearby players see the HP bar change
       hp_update = Server.StatusUpdate.hp_mp(state.object_id, new_hp, 0)
-      broadcast_to_region(new_state, hp_update)
-      # Always aggro on attacker regardless of is_aggressive flag
-      new_state = enter_combat(new_state, from_pid)
+      broadcast_to_region(state, hp_update)
+      base = %{state | hp: new_hp, hate_map: new_hate, target_pid: new_target}
+
+      new_state =
+        case state.ai_state do
+          :combat ->
+            base
+
+          _ ->
+            cancel_timer(base.attack_timer)
+            atk_ms = round(1000 / (base.template.atk_speed / 500.0))
+            timer = Process.send_after(self(), :auto_attack_tick, atk_ms)
+            %{base | ai_state: :combat, attack_timer: timer}
+        end
+
       {:noreply, new_state}
     end
+  end
+
+  # Backward-compatible clause: no from_pid — just deduct HP, no hate added
+  def handle_cast({:take_damage, damage}, %{ai_state: :dead} = state) do
+    _ = damage
+    {:noreply, state}
+  end
+
+  def handle_cast({:take_damage, damage}, state) do
+    new_hp = max(0.0, state.hp - damage)
+
+    if new_hp <= 0 do
+      {:noreply, handle_death(state)}
+    else
+      hp_update = Server.StatusUpdate.hp_mp(state.object_id, new_hp, 0)
+      broadcast_to_region(state, hp_update)
+      {:noreply, %{state | hp: new_hp}}
+    end
+  end
+
+  def handle_cast({:add_hate, player_pid, amount}, %{ai_state: :dead} = state) do
+    _ = {player_pid, amount}
+    {:noreply, state}
+  end
+
+  def handle_cast({:add_hate, player_pid, amount}, state) do
+    new_hate = Map.update(state.hate_map, player_pid, amount, &(&1 + amount))
+    new_target = select_top_hated(new_hate, state)
+    base = %{state | hate_map: new_hate, target_pid: new_target}
+
+    new_state =
+      if state.ai_state == :idle and new_target != nil do
+        cancel_timer(base.attack_timer)
+        atk_ms = round(1000 / (base.template.atk_speed / 500.0))
+        timer = Process.send_after(self(), :auto_attack_tick, atk_ms)
+        %{base | ai_state: :combat, attack_timer: timer}
+      else
+        base
+      end
+
+    {:noreply, new_state}
   end
 
   # M49: Apply crowd control
@@ -224,7 +284,8 @@ defmodule L2E.NPC.Instance do
     if t.is_aggressive and in_aggro_range?(state.position, info.position, t.aggro_range) do
       case Registry.lookup(@registry, info.char_id) do
         [{player_pid, _}] ->
-          new_state = enter_combat(state, player_pid)
+          new_hate = Map.put(state.hate_map, player_pid, 100)
+          new_state = enter_combat(%{state | hate_map: new_hate}, player_pid)
           {:noreply, new_state}
 
         [] ->
@@ -238,10 +299,20 @@ defmodule L2E.NPC.Instance do
   def handle_info({:broadcast, :player_entered, _info}, state), do: {:noreply, state}
 
   def handle_info({:broadcast, :player_left, char_id}, state) do
-    # If our current target left, drop combat
     case Registry.lookup(@registry, char_id) do
-      [{pid, _}] when pid == state.target_pid ->
-        {:noreply, drop_target(state)}
+      [{pid, _}] ->
+        new_hate = Map.delete(state.hate_map, pid)
+        new_target = select_top_hated(new_hate, state)
+
+        new_state =
+          if new_target == nil do
+            cancel_timer(state.attack_timer)
+            %{state | hate_map: %{}, target_pid: nil, target_id: nil, ai_state: :idle, attack_timer: nil}
+          else
+            %{state | hate_map: new_hate, target_pid: new_target}
+          end
+
+        {:noreply, new_state}
 
       _ ->
         {:noreply, state}
@@ -347,7 +418,10 @@ defmodule L2E.NPC.Instance do
   end
 
   # M49: DoT tick
-  def handle_info({:dot_tick, damage_per_tick, tick_ms, ticks_left}, %{ai_state: ai_state} = state)
+  def handle_info(
+        {:dot_tick, damage_per_tick, tick_ms, ticks_left},
+        %{ai_state: ai_state} = state
+      )
       when ai_state != :dead do
     new_hp = max(0.0, state.hp - damage_per_tick)
 
@@ -381,19 +455,15 @@ defmodule L2E.NPC.Instance do
   # -----------------------------------------------------------------------
 
   defp enter_combat(state, target_pid) do
-    if state.ai_state == :combat and state.target_pid == target_pid do
-      state
-    else
-      cancel_timer(state.attack_timer)
-      atk_ms = round(1000 / (state.template.atk_speed / 500.0))
-      timer = Process.send_after(self(), :auto_attack_tick, atk_ms)
-      %{state | ai_state: :combat, target_pid: target_pid, attack_timer: timer}
-    end
+    cancel_timer(state.attack_timer)
+    atk_ms = round(1000 / (state.template.atk_speed / 500.0))
+    timer = Process.send_after(self(), :auto_attack_tick, atk_ms)
+    %{state | ai_state: :combat, target_pid: target_pid, attack_timer: timer}
   end
 
   defp drop_target(state) do
     cancel_timer(state.attack_timer)
-    %{state | target_pid: nil, target_id: nil, ai_state: :idle, attack_timer: nil}
+    %{state | hate_map: %{}, target_pid: nil, target_id: nil, ai_state: :idle, attack_timer: nil}
   end
 
   defp execute_attack(state) do
@@ -482,6 +552,7 @@ defmodule L2E.NPC.Instance do
       state
       | hp: 0.0,
         ai_state: :dead,
+        hate_map: %{},
         target_pid: nil,
         target_id: nil,
         attack_timer: nil,
@@ -534,4 +605,16 @@ defmodule L2E.NPC.Instance do
 
   defp cancel_timer(nil), do: :ok
   defp cancel_timer(ref), do: Process.cancel_timer(ref)
+
+  defp select_top_hated(hate_map, _state) when map_size(hate_map) == 0, do: nil
+
+  defp select_top_hated(hate_map, _state) do
+    hate_map
+    |> Enum.filter(fn {pid, _} -> Process.alive?(pid) end)
+    |> Enum.max_by(fn {_, hate} -> hate end, fn -> nil end)
+    |> case do
+      {pid, _} -> pid
+      nil -> nil
+    end
+  end
 end
