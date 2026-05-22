@@ -103,6 +103,7 @@ graph TB
         App --> TpTbl[Data.TeleporterTable<br/>ETS]
         App --> EnchTbl[Data.EnchantData<br/>ETS]
         App --> ZoneTbl[Zone.ZoneTable<br/>ETS]
+        App --> HtmCache[Data.HtmCache<br/>Agent]
         App --> SessionReg[Session.Registry<br/>:unique]
         App --> SessionSup[Session.Supervisor<br/>DynamicSupervisor]
         App --> WorldSup[World.Supervisor]
@@ -393,17 +394,30 @@ L2E:      1.0   2.0   3.9   7.8   15.4  (near-linear)
 | M27 – Player-to-player trade | Ephemeral `Trade` GenServer per session; add/remove items, confirm, cancel; 60 s auto-cancel timer; atomic item transfer via `Inventory` |
 | M28 – Enchant system | `Data.EnchantData` ETS from `EnchantItemData.xml`; `try_enchant/2` with Interlude rates; blessed scroll (item kept on fail) vs normal scroll (item destroyed); `RequestEnchantItem` + `EnchantResult` packets |
 | M29 – Zone system | `Zone.ZoneTable` ETS loading all `data/zones/*.xml`; NPoly point-in-polygon geometry; `zone_type_at/3` with priority `:peace > :no_pvp > :siege > :pvp`; attacks and skills blocked in peace zones |
+| M30 – PvP flag system | PvP / PK flag state, karma accumulation, flag timer, `UserInfo` updates on flag change |
+| M31 – NPC AI improvements | Aggro range detection on player enter, leash radius, return-to-spawn path, random walk in idle |
+| M32 – Quest system | Quest state machine, quest items, NPC quest flags, reward delivery |
+| M33 – Geodata heightmap | `.l2j` geodata integration; LOS and movement height validation replacing permissive stubs |
+| M34 – Olympiad | Match registration, 1v1 arena instance, score tracking |
+| M35 – Private Store | Sell-side private store: open/close shop, price list, `PrivateStoreMsgSell` / `PrivateStoreManageListSell` / `PrivateStoreListSell` packets; `RequestPrivateStoreBuy` with atomic inventory transfer |
+| M36 – Clan Warehouse | `ClanWarehouse` GenServer (registered as `{:clan, clan_id}` in `Warehouse.Registry`); `clan_warehouse_items` DB table; deposit / withdraw routed by `warehouse_context` in `PlayerSession`; NPC dialog links shown only to clan members |
+| M37 – Karma item drop | On PK death with karma > 0, non-equipped items have a chance to drop to the ground; drops use region `SpawnItem` broadcast + 60 s decay timer |
+| M38 – Ground item & corpse decay | Ground items despawn after 60 s (`{:despawn_item, object_id}` timer in `Region`); NPC corpses despawn after 7 s (`:corpse_decay` timer in `NPC.Instance`) |
+| M39 – Soulshot / Spiritshot | `RequestAutoSoulShot` toggle; `ExAutoSoulShot` server confirm; `consume_shot_and_boost/2` injects P.Atk / M.Atk multiplier into each attack tick |
+| M40 – HtmCache | `L2E.Data.HtmCache` Agent with lazy file loading from `priv/game/data/html/`; `%VAR%` token substitution; `open_npc_dialog` tries file HTML first, falls back to procedurally generated dialog |
+| M41 – Flood Protectors | Per-opcode sliding-window rate limiter in `ConnectionHandler`; default 15 pkt/s, strict 5 pkt/s for combat opcodes (0x01 / 0x0A / 0x2C); excess packets silently dropped without disconnecting |
+| M42 – GM Admin Commands | `accounts.access_level` DB column; `L2E.Admin.CommandHandler` parser; `admin_spawn`, `admin_teleport`, `admin_kick`, `admin_invisible` bypass commands; all gated on `access_level > 0` loaded at AuthLogin |
 
 ### Next
 
 | Milestone | Description |
 |-----------|-------------|
-| M30 – PvP flag system | PvP / PK flag state, karma accumulation, flag timer, `UserInfo` updates on flag change |
-| M31 – NPC AI improvements | Aggro range detection on player enter, leash radius, return-to-spawn path, random walk in idle |
-| M32 – Quest system | Quest state machine, quest items, NPC quest flags, reward delivery |
-| M33 – Geodata heightmap | Replace stubs with real `.l2j` geodata for LOS and movement validation |
-| M34 – Olympiad | Match registration, 1v1 arena instance, score tracking |
-| M35 – Siege | Castle siege zone lifecycle, siege flag placement, attacker/defender logic |
+| M43 – Private Store (buy side) | Buy-side private store: open/close buy shop, `SetPrivateStoreListBuy`, buyer-initiated purchase flow |
+| M44 – Siege system | Castle siege zone lifecycle, siege flag placement, attacker/defender clan logic, siege scheduler |
+| M45 – Quest system expansion | Additional quest chains, repeatable quests, quest item rewards, NPC quest markers |
+| M46 – Geodata validation | Replace permissive stubs with real `.l2j` geodata for movement blocking and LOS checks |
+| M47 – Nodule / augmentation | Item augmentation system, active/passive augment skills |
+| M48 – Distributed nodes | Multi-node BEAM cluster via `libcluster`; region handoff across nodes; login server HA |
 
 ---
 

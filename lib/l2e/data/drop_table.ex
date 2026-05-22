@@ -101,9 +101,10 @@ defmodule L2E.Data.DropTable do
     |> Enum.map(fn g ->
       %{
         chance: parse_float(g.chance),
-        items: Enum.map(g.items, fn i ->
-          %{item_id: i.item_id, min: i.min, max: i.max, chance: parse_float(i.chance)}
-        end)
+        items:
+          Enum.map(g.items, fn i ->
+            %{item_id: i.item_id, min: i.min, max: i.max, chance: parse_float(i.chance)}
+          end)
       }
     end)
   end

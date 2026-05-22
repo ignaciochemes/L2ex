@@ -28,11 +28,19 @@ defmodule L2E.Network.ConnectionHandler do
   # Milliseconds before a connection that never completes handshake is closed.
   @handshake_timeout_ms 15_000
 
+  # Per-opcode flood limits (packets per second window).
+  @flood_limit 15
+  @strict_flood_limit 5
+  # Opcodes that require stricter rate limiting (ValidatePosition, AttackRequest, UseSkill)
+  @strict_opcodes [0x01, 0x0A, 0x2C]
+
   @type state :: %{
           session_pid: pid() | nil,
           crypt: SessionCrypt.t(),
           buffer: binary(),
-          handshake_timer: reference() | nil
+          handshake_timer: reference() | nil,
+          packet_counters: %{integer() => non_neg_integer()},
+          flood_window_start: integer()
         }
 
   # -----------------------------------------------------------------------
@@ -49,7 +57,9 @@ defmodule L2E.Network.ConnectionHandler do
       session_pid: nil,
       crypt: crypt,
       buffer: <<>>,
-      handshake_timer: timer
+      handshake_timer: timer,
+      packet_counters: %{},
+      flood_window_start: 0
     }
 
     :ok = ThousandIsland.Socket.send(socket, build_key_packet_frame(key_8, crypt))
@@ -160,21 +170,57 @@ defmodule L2E.Network.ConnectionHandler do
   end
 
   defp process_packet(<<opcode::8, body::binary>>, _socket, state) do
-    case Decoder.decode(opcode, body) do
-      {:ok, packet} ->
-        Router.dispatch(packet, self(), state.session_pid)
-        {:ok, state}
+    {verdict, new_state} = check_flood(state, opcode)
 
-      {:error, :unknown_opcode} ->
-        Logger.debug("[ConnectionHandler] Unknown opcode 0x#{Integer.to_string(opcode, 16)}")
-        {:ok, state}
+    case verdict do
+      :drop ->
+        Logger.debug("[ConnectionHandler] Flood drop opcode 0x#{Integer.to_string(opcode, 16)}")
+        {:ok, new_state}
 
-      {:error, :malformed} ->
-        {:error, :malformed_packet}
+      :allow ->
+        case Decoder.decode(opcode, body) do
+          {:ok, packet} ->
+            Router.dispatch(packet, self(), new_state.session_pid)
+            {:ok, new_state}
+
+          {:error, :unknown_opcode} ->
+            Logger.debug("[ConnectionHandler] Unknown opcode 0x#{Integer.to_string(opcode, 16)}")
+            {:ok, new_state}
+
+          {:error, :malformed} ->
+            {:error, :malformed_packet}
+        end
     end
   end
 
   defp process_packet(<<>>, _socket, state), do: {:ok, state}
+
+  # -----------------------------------------------------------------------
+  # Flood protection
+  # -----------------------------------------------------------------------
+
+  defp check_flood(%{flood_window_start: window_start, packet_counters: counters} = state, opcode) do
+    now = System.monotonic_time(:millisecond)
+
+    {window_start, counters} =
+      if now - window_start > 1_000 do
+        {now, %{}}
+      else
+        {window_start, counters}
+      end
+
+    count = Map.get(counters, opcode, 0) + 1
+
+    new_state = %{
+      state
+      | flood_window_start: window_start,
+        packet_counters: Map.put(counters, opcode, count)
+    }
+
+    limit = if opcode in @strict_opcodes, do: @strict_flood_limit, else: @flood_limit
+    verdict = if count > limit, do: :drop, else: :allow
+    {verdict, new_state}
+  end
 
   # -----------------------------------------------------------------------
   # KeyPacket (server → client, first frame, UNENCRYPTED)

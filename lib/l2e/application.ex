@@ -21,6 +21,7 @@ defmodule L2E.Application do
       L2E.Data.EnchantData,
       L2E.Data.DropTable,
       L2E.Zone.ZoneTable,
+      L2E.Data.HtmCache,
 
       # Registry for looking up PlayerSession pids by char_id
       {Registry, keys: :unique, name: L2E.Session.Registry},

@@ -3,9 +3,9 @@ defmodule L2E.Repo.Migrations.AddKarmaToCharacters do
 
   def change do
     alter table(:characters) do
-      add :karma, :integer, default: 0, null: false
-      add :pvp_kills, :integer, default: 0, null: false
-      add :pk_kills, :integer, default: 0, null: false
+      add(:karma, :integer, default: 0, null: false)
+      add(:pvp_kills, :integer, default: 0, null: false)
+      add(:pk_kills, :integer, default: 0, null: false)
     end
   end
 end

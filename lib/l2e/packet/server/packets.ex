@@ -27,8 +27,7 @@ defmodule L2E.Packet.Server.UserInfo do
   @behaviour L2E.Packet.Encodable
 
   # TODO: expand fields as character model grows
-  defstruct [:char_id, :char_name, :x, :y, :z, :heading, :hp, :max_hp,
-             pvp_flag: 0, karma: 0]
+  defstruct [:char_id, :char_name, :x, :y, :z, :heading, :hp, :max_hp, pvp_flag: 0, karma: 0]
   @type t :: %__MODULE__{}
 
   @opcode 0x04
@@ -67,8 +66,8 @@ defmodule L2E.Packet.Server.CharInfo do
     karma = p.karma || 0
 
     <<@opcode::8, p.x::little-32-signed, p.y::little-32-signed, p.z::little-32-signed,
-      p.char_id::little-32, name::binary, p.heading::little-32,
-      pvp_flag::little-32, karma::little-32>>
+      p.char_id::little-32, name::binary, p.heading::little-32, pvp_flag::little-32,
+      karma::little-32>>
   end
 
   defp encode_utf16(nil), do: <<0::16>>
@@ -1774,5 +1773,110 @@ defmodule L2E.Packet.Server.EnchantResult do
       end
 
     <<@opcode::8, result_int::little-32>>
+  end
+end
+
+# M39 — Confirms auto soulshot/spiritshot toggle to client (extended 0xFE/0x12)
+defmodule L2E.Packet.Server.ExAutoSoulShot do
+  @moduledoc "0xFE/0x12 — confirms auto soulshot/spiritshot toggle."
+  @behaviour L2E.Packet.Encodable
+
+  defstruct [:item_id, :type]
+  @type t :: %__MODULE__{}
+
+  @impl L2E.Packet.Encodable
+  def encode(%__MODULE__{item_id: item_id, type: type}) do
+    <<0xFE, 0x12::little-16, item_id::little-32, type::little-32>>
+  end
+end
+
+# M35 — Private store server packets
+defmodule L2E.Packet.Server.PrivateStoreMsgSell do
+  @moduledoc "0x9C — broadcasts that a player opened (or updated) a sell store."
+  @behaviour L2E.Packet.Encodable
+
+  defstruct [:object_id, :title]
+  @type t :: %__MODULE__{}
+
+  @opcode 0x9C
+
+  @impl L2E.Packet.Encodable
+  def encode(%__MODULE__{object_id: object_id, title: title}) do
+    title_bin = :unicode.characters_to_binary(title || "", :utf8, {:utf16, :little}) <> <<0, 0>>
+    <<@opcode::8, object_id::little-32>> <> title_bin
+  end
+end
+
+defmodule L2E.Packet.Server.PrivateStoreManageListSell do
+  @moduledoc "0x9A — sends seller's inventory and current store config for store management UI."
+  @behaviour L2E.Packet.Encodable
+
+  # available_items and store_items: [%{type2, obj_id, item_id, count, enchant, bodypart, price, ref_price}]
+  defstruct [:seller_id, :is_package, :adena, :available_items, :store_items]
+  @type t :: %__MODULE__{}
+
+  @opcode 0x9A
+
+  @impl L2E.Packet.Encodable
+  def encode(%__MODULE__{
+        seller_id: seller_id,
+        is_package: is_package,
+        adena: adena,
+        available_items: available_items,
+        store_items: store_items
+      }) do
+    avail = available_items || []
+    stored = store_items || []
+
+    avail_bin =
+      Enum.reduce(avail, <<length(avail)::little-32>>, fn item, acc ->
+        acc <>
+          <<item.type2::little-32, item.obj_id::little-32, item.item_id::little-32,
+            item.count::little-32, 0::little-16, item.enchant::little-16, 0::little-16,
+            item.bodypart::little-32, item.price::little-32>>
+      end)
+
+    stored_bin =
+      Enum.reduce(stored, <<length(stored)::little-32>>, fn item, acc ->
+        acc <>
+          <<item.type2::little-32, item.obj_id::little-32, item.item_id::little-32,
+            item.count::little-32, 0::little-16, item.enchant::little-16, 0::little-16,
+            item.bodypart::little-32, item.price::little-32, item[:ref_price] || 0::little-32>>
+      end)
+
+    <<@opcode::8, seller_id::little-32, is_package::little-32, adena::little-32>> <>
+      avail_bin <> stored_bin
+  end
+end
+
+defmodule L2E.Packet.Server.PrivateStoreListSell do
+  @moduledoc "0x9B — sends a seller's active store list to the buyer."
+  @behaviour L2E.Packet.Encodable
+
+  # items: [%{type2, obj_id, item_id, count, enchant, bodypart, price, ref_price}]
+  defstruct [:seller_id, :is_package, :buyer_adena, :items]
+  @type t :: %__MODULE__{}
+
+  @opcode 0x9B
+
+  @impl L2E.Packet.Encodable
+  def encode(%__MODULE__{
+        seller_id: seller_id,
+        is_package: is_package,
+        buyer_adena: buyer_adena,
+        items: items
+      }) do
+    store_items = items || []
+
+    items_bin =
+      Enum.reduce(store_items, <<length(store_items)::little-32>>, fn item, acc ->
+        acc <>
+          <<item.type2::little-32, item.obj_id::little-32, item.item_id::little-32,
+            item.count::little-32, 0::little-16, item.enchant::little-16, 0::little-16,
+            item.bodypart::little-32, item.price::little-32, item[:ref_price] || 0::little-32>>
+      end)
+
+    <<@opcode::8, seller_id::little-32, is_package::little-32, buyer_adena::little-32>> <>
+      items_bin
   end
 end

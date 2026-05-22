@@ -948,10 +948,133 @@ defmodule L2E.Packet.Client.RequestDropItem do
   @type t :: %__MODULE__{}
 
   @impl L2E.Packet.Decodable
-  def decode(<<object_id::little-32, count::little-32, x::little-32-signed,
-               y::little-32-signed, z::little-32-signed, _rest::binary>>) do
+  def decode(
+        <<object_id::little-32, count::little-32, x::little-32-signed, y::little-32-signed,
+          z::little-32-signed, _rest::binary>>
+      ) do
     {:ok, %__MODULE__{object_id: object_id, count: count, x: x, y: y, z: z}}
   end
 
   def decode(_), do: {:error, :malformed}
+end
+
+# M39 — Soulshot / Spiritshot auto-use toggle (extended opcode 0xD0/0x05)
+defmodule L2E.Packet.Client.RequestAutoSoulShot do
+  @moduledoc "0xD0/0x05 — toggle auto soulshot/spiritshot for an item. type: 1=on, 0=off."
+  @behaviour L2E.Packet.Decodable
+
+  defstruct [:item_id, :type]
+  @type t :: %__MODULE__{}
+
+  @impl L2E.Packet.Decodable
+  def decode(<<item_id::little-32, type::little-32, _rest::binary>>) do
+    {:ok, %__MODULE__{item_id: item_id, type: type}}
+  end
+
+  def decode(_), do: {:error, :malformed}
+end
+
+# M35 — Private store management
+defmodule L2E.Packet.Client.RequestPrivateStoreManageSell do
+  @moduledoc "0x73 — player opens the sell store management interface."
+  @behaviour L2E.Packet.Decodable
+
+  defstruct []
+
+  @impl L2E.Packet.Decodable
+  def decode(_body), do: {:ok, %__MODULE__{}}
+end
+
+defmodule L2E.Packet.Client.SetPrivateStoreListSell do
+  @moduledoc "0x74 — player submits their sell store item list. Each item: object_id, count, price."
+  @behaviour L2E.Packet.Decodable
+
+  defstruct [:is_package, :items]
+  @type t :: %__MODULE__{}
+
+  @impl L2E.Packet.Decodable
+  def decode(<<is_package::little-32, count::little-32, rest::binary>>) do
+    {:ok, %__MODULE__{is_package: is_package, items: decode_items(count, rest, [])}}
+  end
+
+  def decode(_), do: {:error, :malformed}
+
+  defp decode_items(0, _bin, acc), do: Enum.reverse(acc)
+
+  defp decode_items(
+         n,
+         <<obj_id::little-32, count::little-32, price::little-32, rest::binary>>,
+         acc
+       ) do
+    decode_items(n - 1, rest, [%{object_id: obj_id, count: count, price: price} | acc])
+  end
+
+  defp decode_items(_, _, acc), do: Enum.reverse(acc)
+end
+
+defmodule L2E.Packet.Client.RequestPrivateStoreQuitSell do
+  @moduledoc "0x76 — player closes their sell store."
+  @behaviour L2E.Packet.Decodable
+
+  defstruct []
+
+  @impl L2E.Packet.Decodable
+  def decode(_body), do: {:ok, %__MODULE__{}}
+end
+
+defmodule L2E.Packet.Client.SetPrivateStoreMsgSell do
+  @moduledoc "0x77 — player sets the title message for their sell store."
+  @behaviour L2E.Packet.Decodable
+
+  defstruct [:title]
+  @type t :: %__MODULE__{}
+
+  @impl L2E.Packet.Decodable
+  def decode(body) do
+    # UTF-16LE null-terminated string
+    case body do
+      <<>> ->
+        {:ok, %__MODULE__{title: ""}}
+
+      bin ->
+        title = decode_utf16_string(bin)
+        {:ok, %__MODULE__{title: title}}
+    end
+  end
+
+  defp decode_utf16_string(bin) do
+    chars = for <<a::8, b::8 <- bin>>, into: [], do: <<a::8, b::8>>
+
+    chars
+    |> Enum.take_while(&(&1 != <<0, 0>>))
+    |> Enum.map(fn <<a, b>> -> :unicode.characters_to_binary(<<a, b>>, {:utf16, :little}) end)
+    |> Enum.join()
+  end
+end
+
+defmodule L2E.Packet.Client.RequestPrivateStoreBuy do
+  @moduledoc "0x79 — buyer purchases items from a player sell store. Each item: object_id, count, price."
+  @behaviour L2E.Packet.Decodable
+
+  defstruct [:seller_id, :items]
+  @type t :: %__MODULE__{}
+
+  @impl L2E.Packet.Decodable
+  def decode(<<seller_id::little-32, count::little-32, rest::binary>>) do
+    {:ok, %__MODULE__{seller_id: seller_id, items: decode_items(count, rest, [])}}
+  end
+
+  def decode(_), do: {:error, :malformed}
+
+  defp decode_items(0, _bin, acc), do: Enum.reverse(acc)
+
+  defp decode_items(
+         n,
+         <<obj_id::little-32, count::little-32, price::little-32, rest::binary>>,
+         acc
+       ) do
+    decode_items(n - 1, rest, [%{object_id: obj_id, count: count, price: price} | acc])
+  end
+
+  defp decode_items(_, _, acc), do: Enum.reverse(acc)
 end

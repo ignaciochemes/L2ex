@@ -299,6 +299,14 @@ defmodule L2E.NPC.Instance do
 
   def handle_info(:return_tick, state), do: {:noreply, state}
 
+  # Corpse disappears 7 seconds after death
+  def handle_info(:corpse_decay, %{ai_state: :dead} = state) do
+    broadcast_to_region(state, %Server.DeleteObject{object_id: state.object_id})
+    {:stop, :normal, state}
+  end
+
+  def handle_info(:corpse_decay, state), do: {:noreply, state}
+
   def handle_info(msg, state) do
     Logger.debug("[NPC.Instance] Unexpected: #{inspect(msg)}")
     {:noreply, state}
@@ -403,6 +411,8 @@ defmodule L2E.NPC.Instance do
     )
 
     Logger.info("[NPC.Instance] #{state.template.name} (id=#{state.object_id}) died")
+
+    Process.send_after(self(), :corpse_decay, 7_000)
 
     %{
       state

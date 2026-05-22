@@ -20,7 +20,7 @@ defmodule L2E.Session.PlayerSession do
 
   import Ecto.Query, only: [from: 2]
 
-  alias L2E.{Repo, DB.Character, DB.Item}
+  alias L2E.{Repo, DB.Account, DB.Character, DB.Item}
   alias L2E.Packet.Server
   alias L2E.World.Region
   alias L2E.Game.{ClassTemplates, Stats}
@@ -140,7 +140,19 @@ defmodule L2E.Session.PlayerSession do
       # Regen tick timer (3-second interval when alive)
       regen_timer: nil,
       # Auto-save timer (5-minute interval)
-      save_timer: nil
+      save_timer: nil,
+      # M39: Auto soulshot item_id (nil = disabled)
+      autoshot_item_id: nil,
+      # M35: Private store
+      private_store_type: :none,
+      private_store_list: [],
+      private_store_title: "",
+      # M42: GM access level (0 = normal player, >0 = GM)
+      access_level: 0,
+      # M42: GM invisibility toggle
+      invisible: false,
+      # M36: Tracks which warehouse context the player has open (:personal | :clan)
+      warehouse_context: :personal
     }
 
     {:ok, state}
@@ -202,6 +214,7 @@ defmodule L2E.Session.PlayerSession do
         )
       end
 
+      maybe_drop_karma_items(state)
       Process.send_after(self(), :respawn, @respawn_ms)
       {:noreply, %{new_state | dead: true, attacking: false, attack_timer: nil, regen_timer: nil}}
     else
@@ -221,7 +234,10 @@ defmodule L2E.Session.PlayerSession do
   end
 
   # Notification that we killed another player
-  def handle_cast({:player_killed, _victim_pid, victim_pvp_flag, victim_karma, victim_level}, state) do
+  def handle_cast(
+        {:player_killed, _victim_pid, victim_pvp_flag, victim_karma, victim_level},
+        state
+      ) do
     new_state =
       cond do
         # Victim had karma (was a PK) — no karma gain, no PvP kill count
@@ -232,24 +248,28 @@ defmodule L2E.Session.PlayerSession do
         # Victim was PvP flagged — mutual fight, count as PvP kill
         victim_pvp_flag > 0 ->
           new_pvp = state.pvp_kills + 1
+
           if state.char_db_id do
             Repo.update_all(
               from(c in Character, where: c.id == ^state.char_db_id),
               set: [pvp_kills: new_pvp]
             )
           end
+
           %{state | pvp_kills: new_pvp}
 
         # Victim was innocent — this is a PK
         true ->
           new_karma = state.karma + victim_level * 9
           new_pk = state.pk_kills + 1
+
           if state.char_db_id do
             Repo.update_all(
               from(c in Character, where: c.id == ^state.char_db_id),
               set: [karma: new_karma, pk_kills: new_pk]
             )
           end
+
           new_s = %{state | karma: new_karma, pk_kills: new_pk}
           broadcast_user_info(new_s)
           new_s
@@ -367,6 +387,26 @@ defmodule L2E.Session.PlayerSession do
     {:noreply, final_state}
   end
 
+  # M35: Seller is notified that a buyer purchased items from their store
+  def handle_cast({:store_items_sold, sold_items, _total_cost}, state) do
+    # Remove sold items from store list
+    sold_obj_ids = MapSet.new(sold_items, & &1.object_id)
+
+    new_store_list =
+      Enum.reject(state.private_store_list, fn entry ->
+        MapSet.member?(sold_obj_ids, entry.object_id)
+      end)
+
+    new_state =
+      if new_store_list == [] do
+        %{state | private_store_list: [], private_store_type: :none}
+      else
+        %{state | private_store_list: new_store_list}
+      end
+
+    {:noreply, new_state}
+  end
+
   # -----------------------------------------------------------------------
   # AOI broadcasts from Region
   # -----------------------------------------------------------------------
@@ -424,9 +464,11 @@ defmodule L2E.Session.PlayerSession do
             {:noreply, %{state | attacking: false, attack_timer: nil, target_id: nil}}
 
           player_pid ->
-            my_stats = player_combat_stats(state)
+            my_stats = consume_shot_and_boost(state, player_combat_stats(state))
+
             {:ok, _target_char_id, target_stats, target_pos} =
               GenServer.call(player_pid, :get_combat_stats)
+
             {damage, result} = Resolver.resolve_hit(my_stats, target_stats)
 
             attack_pkt = %Server.Attack{
@@ -453,7 +495,7 @@ defmodule L2E.Session.PlayerSession do
 
       npc_pid ->
         npc_stats = L2E.NPC.Instance.get_stats(npc_pid)
-        my_stats = player_combat_stats(state)
+        my_stats = consume_shot_and_boost(state, player_combat_stats(state))
         {damage, result} = Resolver.resolve_hit(my_stats, npc_stats)
 
         # Broadcast Attack packet to region
@@ -743,6 +785,11 @@ defmodule L2E.Session.PlayerSession do
     {:reply, {:ok, info}, state}
   end
 
+  # M35: Buyer calls this to read the seller's current store list + char_id
+  def handle_call(:get_store_list, _from, state) do
+    {:reply, {state.char_id, state.private_store_list}, state}
+  end
+
   # -----------------------------------------------------------------------
   # Packet handlers (auth state machine)
   # -----------------------------------------------------------------------
@@ -753,7 +800,20 @@ defmodule L2E.Session.PlayerSession do
     case L2E.LoginServer.AccountStore.pop(pkt.login_name, pkt.play_ok1, pkt.play_ok2) do
       {:ok, _session_key} ->
         Logger.info("[PlayerSession] AuthLogin ok for #{pkt.login_name}")
-        new_state = %{state | username: pkt.login_name, auth_state: :authenticated}
+
+        access_level =
+          case Repo.get_by(Account, username: pkt.login_name) do
+            %Account{access_level: lvl} -> lvl
+            nil -> 0
+          end
+
+        new_state = %{
+          state
+          | username: pkt.login_name,
+            auth_state: :authenticated,
+            access_level: access_level
+        }
+
         send(state.conn_pid, {:send_packet, build_char_select_info(pkt.login_name)})
         {:noreply, new_state}
 
@@ -972,8 +1032,14 @@ defmodule L2E.Session.PlayerSession do
       "[PlayerSession] #{char_name} (id=#{char_id}) entered the world (class=#{state.class_id}, level=#{state.level})"
     )
 
-    {:noreply, %{new_state | region_pid: region_pid, skills: skills,
-                             regen_timer: regen_timer, save_timer: save_timer}}
+    {:noreply,
+     %{
+       new_state
+       | region_pid: region_pid,
+         skills: skills,
+         regen_timer: regen_timer,
+         save_timer: save_timer
+     }}
   end
 
   # ---- MoveToLocation (state :in_world) ----------------------------------
@@ -1032,8 +1098,54 @@ defmodule L2E.Session.PlayerSession do
 
         # M16: If target is an NPC, open dialog on second click (or always)
         case find_npc_pid(obj_id) do
-          nil -> :ok
-          npc_pid -> open_npc_dialog(npc_pid, obj_id, state)
+          nil ->
+            # M35: If target is a player with an active sell store, show it
+            case Registry.lookup(L2E.Session.Registry, obj_id) do
+              [{seller_pid, _}] ->
+                {_seller_char_id, store_list} = GenServer.call(seller_pid, :get_store_list)
+
+                unless store_list == [] do
+                  buyer_adena = Inventory.get_adena_count(state.char_id)
+                  seller_items = Inventory.get_items(obj_id)
+
+                  store_display =
+                    Enum.flat_map(store_list, fn entry ->
+                      case Enum.find(seller_items, fn {inst, _} -> inst.id == entry.object_id end) do
+                        nil ->
+                          []
+
+                        {inst, tpl} ->
+                          [
+                            %{
+                              type2: tpl.type2,
+                              obj_id: inst.id,
+                              item_id: inst.item_id,
+                              count: entry.count,
+                              enchant: inst.enchant_level || 0,
+                              bodypart: tpl.bodypart,
+                              price: entry.price,
+                              ref_price: tpl.sell_price
+                            }
+                          ]
+                      end
+                    end)
+
+                  store_pkt = %Server.PrivateStoreListSell{
+                    seller_id: obj_id,
+                    is_package: 0,
+                    buyer_adena: buyer_adena,
+                    items: store_display
+                  }
+
+                  send(state.conn_pid, {:send_packet, store_pkt})
+                end
+
+              _ ->
+                :ok
+            end
+
+          npc_pid ->
+            open_npc_dialog(npc_pid, obj_id, state)
         end
 
         {:noreply, new_state}
@@ -1228,6 +1340,7 @@ defmodule L2E.Session.PlayerSession do
 
         if state.region_pid do
           drop_obj_id = :erlang.unique_integer([:positive, :monotonic])
+
           GenServer.cast(
             state.region_pid,
             {:drop_item, drop_obj_id, template.item_id, x, y, z, instance.count}
@@ -1394,7 +1507,16 @@ defmodule L2E.Session.PlayerSession do
          %{auth_state: :in_world} = state
        ) do
     Enum.each(items, fn %{object_id: inst_id, count: qty} ->
-      case Warehouse.withdraw(state.char_id, inst_id, qty) do
+      wh_result =
+        case state.warehouse_context do
+          :clan when state.clan_id != 0 ->
+            L2E.Warehouse.ClanWarehouse.withdraw(state.clan_id, inst_id, qty)
+
+          _ ->
+            Warehouse.withdraw(state.char_id, inst_id, qty)
+        end
+
+      case wh_result do
         {:ok, item} ->
           {:ok, _change_type, {inv_inst, template}} =
             Inventory.add_item(state.char_id, item.item_id, item.count)
@@ -1422,7 +1544,21 @@ defmodule L2E.Session.PlayerSession do
     Enum.each(items, fn %{object_id: inst_id, count: qty} ->
       case Inventory.remove_item(state.char_id, inst_id, qty) do
         {:ok, _change_type, {inst, _template}} ->
-          case Warehouse.deposit(state.char_id, inst.item_id, qty, inst.enchant_level || 0) do
+          deposit_result =
+            case state.warehouse_context do
+              :clan when state.clan_id != 0 ->
+                L2E.Warehouse.ClanWarehouse.deposit(
+                  state.clan_id,
+                  inst.item_id,
+                  qty,
+                  inst.enchant_level || 0
+                )
+
+              _ ->
+                Warehouse.deposit(state.char_id, inst.item_id, qty, inst.enchant_level || 0)
+            end
+
+          case deposit_result do
             {:ok, _wh_id} ->
               # Send inventory update to remove item from client view
               pkt = %Server.InventoryUpdate{changes: [{3, inst, %{}}]}
@@ -1801,6 +1937,185 @@ defmodule L2E.Session.PlayerSession do
 
   defp handle_packet(%L2E.Packet.Client.RequestOustPledgeMember{}, state), do: {:noreply, state}
 
+  # ---- M39: RequestAutoSoulShot (0xD0/0x05) — toggle auto soulshot -------
+
+  defp handle_packet(
+         %L2E.Packet.Client.RequestAutoSoulShot{item_id: item_id, type: type},
+         %{auth_state: :in_world} = state
+       ) do
+    new_id = if type == 1, do: item_id, else: nil
+    confirm = %Server.ExAutoSoulShot{item_id: item_id, type: type}
+    send(state.conn_pid, {:send_packet, confirm})
+    {:noreply, %{state | autoshot_item_id: new_id}}
+  end
+
+  defp handle_packet(%L2E.Packet.Client.RequestAutoSoulShot{}, state), do: {:noreply, state}
+
+  # ---- M35: Private Store — Sell -----------------------------------------
+
+  defp handle_packet(
+         %L2E.Packet.Client.RequestPrivateStoreManageSell{},
+         %{auth_state: :in_world} = state
+       ) do
+    adena = Inventory.get_adena_count(state.char_id)
+    items = Inventory.get_items(state.char_id)
+
+    available =
+      items
+      |> Enum.reject(fn {inst, _tpl} -> inst.is_equipped end)
+      |> Enum.map(fn {inst, tpl} ->
+        %{
+          type2: tpl.type2,
+          obj_id: inst.id,
+          item_id: inst.item_id,
+          count: inst.count || 1,
+          enchant: inst.enchant_level || 0,
+          bodypart: tpl.bodypart,
+          price: tpl.sell_price
+        }
+      end)
+
+    store_items =
+      state.private_store_list
+      |> Enum.map(fn entry ->
+        case Enum.find(items, fn {inst, _} -> inst.id == entry.object_id end) do
+          nil ->
+            nil
+
+          {inst, tpl} ->
+            %{
+              type2: tpl.type2,
+              obj_id: inst.id,
+              item_id: inst.item_id,
+              count: entry.count,
+              enchant: inst.enchant_level || 0,
+              bodypart: tpl.bodypart,
+              price: entry.price,
+              ref_price: tpl.sell_price
+            }
+        end
+      end)
+      |> Enum.reject(&is_nil/1)
+
+    pkt = %Server.PrivateStoreManageListSell{
+      seller_id: state.char_id,
+      is_package: 0,
+      adena: adena,
+      available_items: available,
+      store_items: store_items
+    }
+
+    send(state.conn_pid, {:send_packet, pkt})
+    {:noreply, state}
+  end
+
+  defp handle_packet(%L2E.Packet.Client.RequestPrivateStoreManageSell{}, state),
+    do: {:noreply, state}
+
+  defp handle_packet(
+         %L2E.Packet.Client.SetPrivateStoreListSell{is_package: is_pkg, items: items},
+         %{auth_state: :in_world} = state
+       ) do
+    # Enrich each store entry with the item_id looked up from seller's inventory
+    inv_items = Inventory.get_items(state.char_id)
+
+    enriched =
+      Enum.flat_map(items, fn entry ->
+        case Enum.find(inv_items, fn {inst, _} -> inst.id == entry.object_id end) do
+          nil -> []
+          {inst, _tpl} -> [Map.put(entry, :item_id, inst.item_id)]
+        end
+      end)
+
+    new_state = %{state | private_store_type: :sell, private_store_list: enriched}
+
+    msg_pkt = %Server.PrivateStoreMsgSell{
+      object_id: state.char_id,
+      title: state.private_store_title
+    }
+
+    if state.region_pid do
+      GenServer.cast(state.region_pid, {:broadcast_packet, msg_pkt})
+    end
+
+    _ = is_pkg
+    {:noreply, new_state}
+  end
+
+  defp handle_packet(%L2E.Packet.Client.SetPrivateStoreListSell{}, state), do: {:noreply, state}
+
+  defp handle_packet(
+         %L2E.Packet.Client.RequestPrivateStoreQuitSell{},
+         %{auth_state: :in_world} = state
+       ) do
+    new_state = %{
+      state
+      | private_store_type: :none,
+        private_store_list: [],
+        private_store_title: ""
+    }
+
+    # Broadcast empty title to clear store icon for nearby players
+    msg_pkt = %Server.PrivateStoreMsgSell{object_id: state.char_id, title: ""}
+
+    if state.region_pid do
+      GenServer.cast(state.region_pid, {:broadcast_packet, msg_pkt})
+    end
+
+    {:noreply, new_state}
+  end
+
+  defp handle_packet(%L2E.Packet.Client.RequestPrivateStoreQuitSell{}, state),
+    do: {:noreply, state}
+
+  defp handle_packet(
+         %L2E.Packet.Client.SetPrivateStoreMsgSell{title: title},
+         %{auth_state: :in_world} = state
+       ) do
+    new_state = %{state | private_store_title: title || ""}
+    {:noreply, new_state}
+  end
+
+  defp handle_packet(%L2E.Packet.Client.SetPrivateStoreMsgSell{}, state), do: {:noreply, state}
+
+  defp handle_packet(
+         %L2E.Packet.Client.RequestPrivateStoreBuy{seller_id: seller_id, items: req_items},
+         %{auth_state: :in_world} = state
+       ) do
+    with [{seller_pid, _}] <- Registry.lookup(L2E.Session.Registry, seller_id),
+         {:ok, total_cost, validated} <- validate_store_items(seller_pid, req_items),
+         :ok <- check_buyer_adena(state.char_id, total_cost) do
+      # Deduct adena from buyer
+      Inventory.spend_adena(state.char_id, total_cost)
+
+      # Process each item: remove from seller, give to buyer
+      Enum.each(validated, fn %{obj_id: obj_id, item_id: item_id, count: count, price: price} ->
+        _ = price
+        Inventory.remove_item(seller_id, obj_id, count)
+
+        case Inventory.add_item(state.char_id, item_id, count) do
+          {:ok, change_type, {instance, template}} ->
+            change_int = change_type_to_int(change_type)
+            pkt = %Server.InventoryUpdate{changes: [{change_int, instance, template}]}
+            send(state.conn_pid, {:send_packet, pkt})
+
+          {:error, _} ->
+            :ok
+        end
+      end)
+
+      # Pay adena to seller and notify them
+      Inventory.add_item(seller_id, 57, total_cost)
+      GenServer.cast(seller_pid, {:store_items_sold, req_items, total_cost})
+    else
+      _ -> :ok
+    end
+
+    {:noreply, state}
+  end
+
+  defp handle_packet(%L2E.Packet.Client.RequestPrivateStoreBuy{}, state), do: {:noreply, state}
+
   defp handle_packet(packet, state) do
     Logger.debug("[PlayerSession] Unhandled packet: #{inspect(packet.__struct__)}")
     {:noreply, state}
@@ -2016,6 +2331,7 @@ defmodule L2E.Session.PlayerSession do
       pvp_flag: state.pvp_flag,
       karma: state.karma
     }
+
     send(state.conn_pid, {:send_packet, pkt})
   end
 
@@ -2082,6 +2398,23 @@ defmodule L2E.Session.PlayerSession do
     npc_name = if template, do: template.name, else: "NPC"
     npc_id = if template, do: template.npc_id, else: 0
 
+    html =
+      case L2E.Data.HtmCache.get("default/#{npc_id}.htm", %{
+             "npc_name" => npc_name,
+             "char_name" => state.char_name,
+             "obj_id" => obj_id
+           }) do
+        nil -> build_default_npc_html(npc_id, obj_id, npc_name, state)
+        content -> content
+      end
+
+    send(
+      state.conn_pid,
+      {:send_packet, %Server.NpcHtmlMessage{npc_object_id: obj_id, html: html}}
+    )
+  end
+
+  defp build_default_npc_html(npc_id, obj_id, npc_name, state) do
     teleport_links =
       case TeleporterTable.get_normal(npc_id) do
         [] ->
@@ -2108,7 +2441,15 @@ defmodule L2E.Session.PlayerSession do
       "<a action=\"bypass -h npc_#{obj_id}_warehouse_deposit\">Warehouse Deposit</a><br>" <>
         "<a action=\"bypass -h npc_#{obj_id}_warehouse_withdraw\">Warehouse Withdraw</a><br>"
 
-    html = """
+    clan_warehouse_links =
+      if state.clan_id != 0 do
+        "<a action=\"bypass -h npc_#{obj_id}_clan_warehouse_deposit\">Clan WH Deposit</a><br>" <>
+          "<a action=\"bypass -h npc_#{obj_id}_clan_warehouse_withdraw\">Clan WH Withdraw</a><br>"
+      else
+        ""
+      end
+
+    """
     <html><body>
     <title>#{npc_name}</title>
     <br>
@@ -2116,14 +2457,10 @@ defmodule L2E.Session.PlayerSession do
     How can I help you?<br>
     #{trade_link}
     #{warehouse_links}
+    #{clan_warehouse_links}
     #{teleport_links}
     </body></html>
     """
-
-    send(
-      state.conn_pid,
-      {:send_packet, %Server.NpcHtmlMessage{npc_object_id: obj_id, html: html}}
-    )
   end
 
   # M16: Handle bypass commands from NPC dialogs
@@ -2137,6 +2474,37 @@ defmodule L2E.Session.PlayerSession do
             handle_npc_bypass(npc_id, action, state)
 
           _ ->
+            {:noreply, state}
+        end
+
+      String.starts_with?(cmd, "admin_") and state.access_level > 0 ->
+        case L2E.Admin.CommandHandler.parse(cmd) do
+          {:ok, {:spawn_npc, npc_id}} ->
+            {x, y, z} = state.position
+            L2E.NPC.SpawnTable.admin_spawn(npc_id, x, y, z)
+            {:noreply, state}
+
+          {:ok, {:teleport, x, y, z}} ->
+            {:noreply, do_teleport({x, y, z}, state)}
+
+          {:ok, {:kick, char_name}} ->
+            case Repo.get_by(Character, name: char_name) do
+              %Character{id: kicked_id} ->
+                case Registry.lookup(L2E.Session.Registry, kicked_id) do
+                  [{pid, _}] -> GenServer.cast(pid, :connection_closed)
+                  _ -> :ok
+                end
+
+              nil ->
+                :ok
+            end
+
+            {:noreply, state}
+
+          {:ok, :toggle_invisible} ->
+            {:noreply, %{state | invisible: !state.invisible}}
+
+          :ignored ->
             {:noreply, state}
         end
 
@@ -2210,7 +2578,7 @@ defmodule L2E.Session.PlayerSession do
     }
 
     send(state.conn_pid, {:send_packet, pkt})
-    {:noreply, state}
+    {:noreply, %{state | warehouse_context: :personal}}
   end
 
   defp handle_npc_bypass(_npc_id, "warehouse_withdraw", state) do
@@ -2218,6 +2586,40 @@ defmodule L2E.Session.PlayerSession do
 
     pkt = %Server.WareHouseWithdrawList{items: wh_items}
     send(state.conn_pid, {:send_packet, pkt})
+    {:noreply, %{state | warehouse_context: :personal}}
+  end
+
+  defp handle_npc_bypass(_npc_id, "clan_warehouse_deposit", state) when state.clan_id != 0 do
+    items = Inventory.get_items(state.char_id)
+
+    adena =
+      Enum.find_value(items, 0, fn {inst, _tmpl} ->
+        if inst.item_id == 57, do: inst.count || 0, else: nil
+      end)
+
+    depositable =
+      Enum.reject(items, fn {inst, _} -> inst.item_id == 57 end)
+      |> Enum.map(fn {inst, _tmpl} -> inst end)
+
+    pkt = %Server.WareHouseDepositList{
+      player_adena: adena,
+      items: depositable
+    }
+
+    send(state.conn_pid, {:send_packet, pkt})
+    {:noreply, %{state | warehouse_context: :clan}}
+  end
+
+  defp handle_npc_bypass(_npc_id, "clan_warehouse_withdraw", state) when state.clan_id != 0 do
+    clan_items = L2E.Warehouse.ClanWarehouse.list(state.clan_id)
+    pkt = %Server.WareHouseWithdrawList{items: clan_items}
+    send(state.conn_pid, {:send_packet, pkt})
+    {:noreply, %{state | warehouse_context: :clan}}
+  end
+
+  defp handle_npc_bypass(_npc_id, action, state)
+       when action in ["clan_warehouse_deposit", "clan_warehouse_withdraw"] do
+    # Player has no clan
     {:noreply, state}
   end
 
@@ -2243,6 +2645,89 @@ defmodule L2E.Session.PlayerSession do
 
   defp cancel_timer(nil), do: :ok
   defp cancel_timer(ref), do: Process.cancel_timer(ref)
+
+  # M37: Drop a random subset of inventory items on death when karma > 0
+  defp maybe_drop_karma_items(%{karma: 0}), do: :ok
+
+  defp maybe_drop_karma_items(%{
+         karma: karma,
+         char_id: char_id,
+         position: pos,
+         region_pid: region_pid
+       }) do
+    drop_chance = min(4 + div(karma, 1000), 40)
+    {x, y, z} = pos
+
+    Inventory.get_items(char_id)
+    |> Enum.each(fn {instance, _template} ->
+      if not instance.is_equipped and :rand.uniform(100) <= drop_chance do
+        count = instance.count || 1
+
+        case Inventory.remove_item(char_id, instance.id, count) do
+          {:ok, _, _} ->
+            if region_pid do
+              obj_id = :erlang.unique_integer([:positive, :monotonic])
+              GenServer.cast(region_pid, {:drop_item, obj_id, instance.item_id, x, y, z, count})
+            end
+
+          _ ->
+            :ok
+        end
+      end
+    end)
+  end
+
+  # M39: Consume one soulshot/spiritshot and boost p_atk by 1.5x if equipped
+  defp consume_shot_and_boost(%{autoshot_item_id: nil}, stats), do: stats
+
+  defp consume_shot_and_boost(%{autoshot_item_id: item_id, char_id: char_id}, stats) do
+    case Enum.find(Inventory.get_items(char_id), fn {inst, _} -> inst.item_id == item_id end) do
+      nil ->
+        stats
+
+      {inst, _} ->
+        Inventory.remove_item(char_id, inst.id, 1)
+        %{stats | p_atk: round(stats.p_atk * 1.5)}
+    end
+  end
+
+  # M35: Validate buyer's requested items against the seller's store list
+  defp validate_store_items(seller_pid, req_items) do
+    {_seller_char_id, store_list} = GenServer.call(seller_pid, :get_store_list)
+
+    result =
+      Enum.reduce_while(req_items, {:ok, 0, []}, fn req, {:ok, acc_cost, acc_items} ->
+        case Enum.find(store_list, fn entry -> entry.object_id == req.object_id end) do
+          nil ->
+            {:halt, :not_in_store}
+
+          entry ->
+            if req.price != entry.price or req.count > entry.count do
+              {:halt, :price_mismatch}
+            else
+              line_cost = entry.price * req.count
+
+              validated = %{
+                obj_id: entry.object_id,
+                item_id: entry.item_id,
+                count: req.count,
+                price: entry.price
+              }
+
+              {:cont, {:ok, acc_cost + line_cost, [validated | acc_items]}}
+            end
+        end
+      end)
+
+    case result do
+      {:ok, total, items} -> {:ok, total, Enum.reverse(items)}
+      err -> {:error, err}
+    end
+  end
+
+  defp check_buyer_adena(char_id, cost) do
+    if Inventory.get_adena_count(char_id) >= cost, do: :ok, else: {:error, :insufficient_adena}
+  end
 
   # -----------------------------------------------------------------------
   # Inventory helpers

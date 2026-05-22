@@ -10,6 +10,7 @@ defmodule L2E.DB.Account do
   schema "accounts" do
     field(:username, :string)
     field(:password_hash, :string)
+    field(:access_level, :integer, default: 0)
     timestamps(type: :utc_datetime)
   end
 

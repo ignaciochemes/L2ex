@@ -221,6 +221,7 @@ defmodule L2E.World.Region do
       send(pid, {:send_packet, spawn_pkt})
     end
 
+    Process.send_after(self(), {:despawn_item, object_id}, 60_000)
     {:noreply, %{state | ground_items: new_ground_items}}
   end
 
@@ -243,6 +244,23 @@ defmodule L2E.World.Region do
 
       true ->
         {:noreply, state}
+    end
+  end
+
+  # Ground item despawn — remove item and send DeleteObject to all entities in region
+  def handle_info({:despawn_item, object_id}, state) do
+    case Map.pop(state.ground_items, object_id) do
+      {nil, _} ->
+        {:noreply, state}
+
+      {_, new_ground_items} ->
+        delete_pkt = %L2E.Packet.Server.DeleteObject{object_id: object_id}
+
+        for {pid, _} <- state.entities do
+          send(pid, {:send_packet, delete_pkt})
+        end
+
+        maybe_stop(%{state | ground_items: new_ground_items})
     end
   end
 

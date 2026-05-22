@@ -30,6 +30,16 @@ defmodule L2E.NPC.SpawnTable do
 
   def start_link(_opts), do: GenServer.start_link(__MODULE__, :ok, name: @name)
 
+  @doc """
+  Admin shortcut: spawn one NPC by id at the given coordinates.
+  Returns `{:ok, pid}` or `{:error, reason}`.
+  """
+  @spec admin_spawn(pos_integer(), integer(), integer(), integer()) ::
+          {:ok, pid()} | {:error, term()}
+  def admin_spawn(npc_id, x, y, z) do
+    GenServer.call(@name, {:admin_spawn, npc_id, x, y, z})
+  end
+
   # -----------------------------------------------------------------------
   # GenServer
   # -----------------------------------------------------------------------
@@ -84,6 +94,13 @@ defmodule L2E.NPC.SpawnTable do
   def handle_info(msg, state) do
     Logger.debug("[SpawnTable] Unexpected: #{inspect(msg)}")
     {:noreply, state}
+  end
+
+  @impl GenServer
+  def handle_call({:admin_spawn, npc_id, x, y, z}, _from, state) do
+    {new_state, pid} = do_spawn(state, {npc_id, x, y, z, 0, 0})
+    result = if pid, do: {:ok, pid}, else: {:error, :spawn_failed}
+    {:reply, result, new_state}
   end
 
   # -----------------------------------------------------------------------

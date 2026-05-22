@@ -79,6 +79,13 @@ defmodule L2E.Packet.Decoder do
   # M33: Destroy item
   def decode(0x59, body), do: Client.RequestDestroyItem.decode(body)
 
+  # M35: Private store — sell
+  def decode(0x73, body), do: Client.RequestPrivateStoreManageSell.decode(body)
+  def decode(0x74, body), do: Client.SetPrivateStoreListSell.decode(body)
+  def decode(0x76, body), do: Client.RequestPrivateStoreQuitSell.decode(body)
+  def decode(0x77, body), do: Client.SetPrivateStoreMsgSell.decode(body)
+  def decode(0x79, body), do: Client.RequestPrivateStoreBuy.decode(body)
+
   # ── Extended two-byte opcode space (0xD0 prefix) ────────────────────────────
   # Body starts with a little-endian 16-bit sub-opcode, then the real payload.
 
@@ -91,6 +98,9 @@ defmodule L2E.Packet.Decoder do
 
   # ── Extended opcode dispatch ─────────────────────────────────────────────────
   # Add clauses here as new 0xD0-prefixed packets are implemented.
+
+  # M39: Auto soulshot/spiritshot toggle
+  defp decode_ext(0x05, body), do: Client.RequestAutoSoulShot.decode(body)
 
   defp decode_ext(_sub, _body), do: {:error, :unknown_opcode}
 end

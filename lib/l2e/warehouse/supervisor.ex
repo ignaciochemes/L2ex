@@ -29,4 +29,12 @@ defmodule L2E.Warehouse.Supervisor do
       {L2E.Warehouse, char_id: char_id}
     )
   end
+
+  @doc "Starts a clan warehouse process for the given clan_id."
+  def start_clan_warehouse(clan_id) do
+    DynamicSupervisor.start_child(
+      L2E.Warehouse.DynamicSupervisor,
+      {L2E.Warehouse.ClanWarehouse, clan_id: clan_id}
+    )
+  end
 end
