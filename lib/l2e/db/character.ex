@@ -30,6 +30,9 @@ defmodule L2E.DB.Character do
     field(:hair_style, :integer, default: 0)
     field(:hair_color, :integer, default: 0)
     field(:face, :integer, default: 0)
+    field(:karma, :integer, default: 0)
+    field(:pvp_kills, :integer, default: 0)
+    field(:pk_kills, :integer, default: 0)
     field(:last_access, :utc_datetime)
     timestamps(type: :utc_datetime)
   end

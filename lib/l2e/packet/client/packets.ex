@@ -924,3 +924,34 @@ defmodule L2E.Packet.Client.RequestEnchantItem do
 
   def decode(_), do: {:error, :malformed}
 end
+
+defmodule L2E.Packet.Client.RequestDestroyItem do
+  @moduledoc "0x59 — request to destroy an item from inventory."
+  @behaviour L2E.Packet.Decodable
+
+  defstruct [:object_id, :count]
+  @type t :: %__MODULE__{}
+
+  @impl L2E.Packet.Decodable
+  def decode(<<object_id::little-32, count::little-32, _rest::binary>>) do
+    {:ok, %__MODULE__{object_id: object_id, count: count}}
+  end
+
+  def decode(_), do: {:error, :malformed}
+end
+
+defmodule L2E.Packet.Client.RequestDropItem do
+  @moduledoc "0x12 — request to drop an item to the ground."
+  @behaviour L2E.Packet.Decodable
+
+  defstruct [:object_id, :count, :x, :y, :z]
+  @type t :: %__MODULE__{}
+
+  @impl L2E.Packet.Decodable
+  def decode(<<object_id::little-32, count::little-32, x::little-32-signed,
+               y::little-32-signed, z::little-32-signed, _rest::binary>>) do
+    {:ok, %__MODULE__{object_id: object_id, count: count, x: x, y: y, z: z}}
+  end
+
+  def decode(_), do: {:error, :malformed}
+end

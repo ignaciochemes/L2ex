@@ -45,6 +45,7 @@ defmodule L2E.Packet.Decoder do
   def decode(0x0D, body), do: Client.CharacterSelect.decode(body)
   def decode(0x0E, body), do: Client.NewCharacter.decode(body)
   # M27: Trade
+  def decode(0x12, body), do: Client.RequestDropItem.decode(body)
   def decode(0x15, body), do: Client.TradeRequest.decode(body)
   def decode(0x16, body), do: Client.AddTradeItem.decode(body)
   def decode(0x17, body), do: Client.TradeDone.decode(body)
@@ -75,6 +76,8 @@ defmodule L2E.Packet.Decoder do
 
   # M28: Enchant
   def decode(0x58, body), do: Client.RequestEnchantItem.decode(body)
+  # M33: Destroy item
+  def decode(0x59, body), do: Client.RequestDestroyItem.decode(body)
 
   # ── Extended two-byte opcode space (0xD0 prefix) ────────────────────────────
   # Body starts with a little-endian 16-bit sub-opcode, then the real payload.

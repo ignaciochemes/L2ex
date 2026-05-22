@@ -130,7 +130,17 @@ defmodule L2E.Session.PlayerSession do
       # Active enchant scroll object_id (nil if no enchant dialog open)
       enchant_scroll_id: nil,
       # Current zone type at player's position (:normal | :peace | :pvp | :siege | :no_pvp | :other)
-      zone_type: :normal
+      zone_type: :normal,
+      # PvP state
+      pvp_flag: 0,
+      karma: 0,
+      pvp_kills: 0,
+      pk_kills: 0,
+      pvp_flag_timer: nil,
+      # Regen tick timer (3-second interval when alive)
+      regen_timer: nil,
+      # Auto-save timer (5-minute interval)
+      save_timer: nil
     }
 
     {:ok, state}
@@ -161,7 +171,7 @@ defmodule L2E.Session.PlayerSession do
   end
 
   # Player receives damage from NPC
-  def handle_cast({:take_damage, amount, _from_pid}, %{dead: false} = state) do
+  def handle_cast({:take_damage, amount, from_pid}, %{dead: false} = state) do
     new_hp = max(0.0, state.hp - amount)
     new_state = %{state | hp: new_hp}
 
@@ -171,20 +181,82 @@ defmodule L2E.Session.PlayerSession do
     # Broadcast vitals update to party window
     if state.party_pid, do: Party.vital_update(state.party_pid, state.char_id, new_hp, state.mp)
 
+    # Flag attacker if they are another player
+    if is_pid(from_pid) and player_pid?(from_pid) do
+      GenServer.cast(from_pid, :set_pvp_flag)
+    end
+
     if new_hp <= 0 do
       Logger.info("[PlayerSession] #{state.char_name} died")
       die_pkt = %Server.Die{object_id: state.char_id, can_sweep: false}
       send(state.conn_pid, {:send_packet, die_pkt})
       if state.region_pid, do: GenServer.cast(state.region_pid, {:broadcast_packet, die_pkt})
       cancel_timer(state.attack_timer)
+      cancel_timer(state.regen_timer)
+
+      # Notify killer about PvP/PK outcome
+      if is_pid(from_pid) and player_pid?(from_pid) do
+        GenServer.cast(
+          from_pid,
+          {:player_killed, self(), state.pvp_flag, state.karma, state.level}
+        )
+      end
+
       Process.send_after(self(), :respawn, @respawn_ms)
-      {:noreply, %{new_state | dead: true, attacking: false, attack_timer: nil}}
+      {:noreply, %{new_state | dead: true, attacking: false, attack_timer: nil, regen_timer: nil}}
     else
       {:noreply, new_state}
     end
   end
 
   def handle_cast({:take_damage, _amount, _from_pid}, state), do: {:noreply, state}
+
+  # Attacker receives a PvP flag from hitting another player
+  def handle_cast(:set_pvp_flag, state) do
+    cancel_timer(state.pvp_flag_timer)
+    timer = Process.send_after(self(), :clear_pvp_flag, 60_000)
+    new_state = %{state | pvp_flag: 1, pvp_flag_timer: timer}
+    broadcast_user_info(new_state)
+    {:noreply, new_state}
+  end
+
+  # Notification that we killed another player
+  def handle_cast({:player_killed, _victim_pid, victim_pvp_flag, victim_karma, victim_level}, state) do
+    new_state =
+      cond do
+        # Victim had karma (was a PK) — no karma gain, no PvP kill count
+        victim_karma > 0 ->
+          # Reduce victim karma is handled on victim side; nothing extra here
+          state
+
+        # Victim was PvP flagged — mutual fight, count as PvP kill
+        victim_pvp_flag > 0 ->
+          new_pvp = state.pvp_kills + 1
+          if state.char_db_id do
+            Repo.update_all(
+              from(c in Character, where: c.id == ^state.char_db_id),
+              set: [pvp_kills: new_pvp]
+            )
+          end
+          %{state | pvp_kills: new_pvp}
+
+        # Victim was innocent — this is a PK
+        true ->
+          new_karma = state.karma + victim_level * 9
+          new_pk = state.pk_kills + 1
+          if state.char_db_id do
+            Repo.update_all(
+              from(c in Character, where: c.id == ^state.char_db_id),
+              set: [karma: new_karma, pk_kills: new_pk]
+            )
+          end
+          new_s = %{state | karma: new_karma, pk_kills: new_pk}
+          broadcast_user_info(new_s)
+          new_s
+      end
+
+    {:noreply, new_state}
+  end
 
   # NPC dropped items go directly into the killer's inventory
   def handle_cast({:receive_drops, drops}, %{auth_state: :in_world} = state) do
@@ -245,7 +317,9 @@ defmodule L2E.Session.PlayerSession do
           z: elem(state.position, 2),
           heading: state.heading,
           hp: trunc(new_hp),
-          max_hp: new_stats.max_hp
+          max_hp: new_stats.max_hp,
+          pvp_flag: state.pvp_flag,
+          karma: state.karma
         }
 
         send(state.conn_pid, {:send_packet, user_info})
@@ -344,8 +418,38 @@ defmodule L2E.Session.PlayerSession do
       when not is_nil(target_id) do
     case find_npc_pid(target_id) do
       nil ->
-        # Target gone — stop attack
-        {:noreply, %{state | attacking: false, attack_timer: nil, target_id: nil}}
+        # Not an NPC — check if it's another player (PvP)
+        case find_player_pid(target_id) do
+          nil ->
+            {:noreply, %{state | attacking: false, attack_timer: nil, target_id: nil}}
+
+          player_pid ->
+            my_stats = player_combat_stats(state)
+            {:ok, _target_char_id, target_stats, target_pos} =
+              GenServer.call(player_pid, :get_combat_stats)
+            {damage, result} = Resolver.resolve_hit(my_stats, target_stats)
+
+            attack_pkt = %Server.Attack{
+              attacker_id: state.char_id,
+              attacker_x: elem(state.position, 0),
+              attacker_y: elem(state.position, 1),
+              attacker_z: elem(state.position, 2),
+              target_id: target_id,
+              damage: damage,
+              miss: result == :miss,
+              crit: result == :crit,
+              target_x: elem(target_pos, 0),
+              target_y: elem(target_pos, 1),
+              target_z: elem(target_pos, 2)
+            }
+
+            if state.region_pid,
+              do: GenServer.cast(state.region_pid, {:broadcast_packet, attack_pkt})
+
+            GenServer.cast(player_pid, {:take_damage, damage, self()})
+            timer = schedule_attack(state)
+            {:noreply, %{state | attack_timer: timer}}
+        end
 
       npc_pid ->
         npc_stats = L2E.NPC.Instance.get_stats(npc_pid)
@@ -391,7 +495,8 @@ defmodule L2E.Session.PlayerSession do
     new_hp = derived.max_hp * 1.0
     new_mp = derived.max_mp * 1.0
 
-    new_state = %{state | dead: false, hp: new_hp, mp: new_mp}
+    regen_timer = Process.send_after(self(), :regen_tick, 3_000)
+    new_state = %{state | dead: false, hp: new_hp, mp: new_mp, regen_timer: regen_timer}
 
     revive_pkt = %Server.Revive{object_id: state.char_id}
     send(state.conn_pid, {:send_packet, revive_pkt})
@@ -399,6 +504,53 @@ defmodule L2E.Session.PlayerSession do
     send(state.conn_pid, {:send_packet, hp_update})
 
     Logger.info("[PlayerSession] #{state.char_name} respawned")
+    {:noreply, new_state}
+  end
+
+  # HP/MP regeneration tick (3-second interval)
+  def handle_info(:regen_tick, %{dead: false, auth_state: :in_world} = state) do
+    template = ClassTemplates.get_or_default(state.class_id)
+
+    hp_regen = Stats.hp_regen(template, state.level)
+    mp_regen = Stats.mp_regen(template, state.level)
+
+    new_hp = min(state.max_hp, state.hp + hp_regen)
+    new_mp = min(state.max_mp, state.mp + mp_regen)
+
+    timer = Process.send_after(self(), :regen_tick, 3_000)
+
+    if new_hp != state.hp or new_mp != state.mp do
+      hp_update = Server.StatusUpdate.hp_mp(state.char_id, new_hp, new_mp)
+      send(state.conn_pid, {:send_packet, hp_update})
+
+      if state.party_pid,
+        do: Party.vital_update(state.party_pid, state.char_id, new_hp, new_mp)
+    end
+
+    {:noreply, %{state | hp: new_hp, mp: new_mp, regen_timer: timer}}
+  end
+
+  def handle_info(:regen_tick, state) do
+    timer = unless state.dead, do: Process.send_after(self(), :regen_tick, 3_000)
+    {:noreply, %{state | regen_timer: timer}}
+  end
+
+  # Auto-save player position + vitals to DB every 5 minutes
+  def handle_info(:auto_save, %{auth_state: :in_world} = state) do
+    persist_position(state)
+    timer = Process.send_after(self(), :auto_save, 300_000)
+    {:noreply, %{state | save_timer: timer}}
+  end
+
+  def handle_info(:auto_save, state) do
+    timer = Process.send_after(self(), :auto_save, 300_000)
+    {:noreply, %{state | save_timer: timer}}
+  end
+
+  # Clear PvP flag after 60 seconds of no combat
+  def handle_info(:clear_pvp_flag, state) do
+    new_state = %{state | pvp_flag: 0, pvp_flag_timer: nil}
+    broadcast_user_info(new_state)
     {:noreply, new_state}
   end
 
@@ -711,6 +863,9 @@ defmodule L2E.Session.PlayerSession do
             max_hp: char.max_hp,
             mp: char.mp,
             max_mp: char.max_mp,
+            karma: Map.get(char, :karma, 0),
+            pvp_kills: Map.get(char, :pvp_kills, 0),
+            pk_kills: Map.get(char, :pk_kills, 0),
             auth_state: :char_selected
         }
 
@@ -789,7 +944,9 @@ defmodule L2E.Session.PlayerSession do
       z: elem(new_state.position, 2),
       heading: new_state.heading,
       hp: trunc(cur_hp),
-      max_hp: derived.max_hp
+      max_hp: derived.max_hp,
+      pvp_flag: new_state.pvp_flag,
+      karma: new_state.karma
     }
 
     send(state.conn_pid, {:send_packet, user_info})
@@ -808,11 +965,15 @@ defmodule L2E.Session.PlayerSession do
 
     region_pid = enter_region(new_state)
 
+    regen_timer = Process.send_after(self(), :regen_tick, 3_000)
+    save_timer = Process.send_after(self(), :auto_save, 300_000)
+
     Logger.info(
       "[PlayerSession] #{char_name} (id=#{char_id}) entered the world (class=#{state.class_id}, level=#{state.level})"
     )
 
-    {:noreply, %{new_state | region_pid: region_pid, skills: skills}}
+    {:noreply, %{new_state | region_pid: region_pid, skills: skills,
+                             regen_timer: regen_timer, save_timer: save_timer}}
   end
 
   # ---- MoveToLocation (state :in_world) ----------------------------------
@@ -1034,6 +1195,50 @@ defmodule L2E.Session.PlayerSession do
   defp handle_packet(%L2E.Packet.Client.RequestEnchantItem{}, state) do
     send(state.conn_pid, {:send_packet, %Server.EnchantResult{result: :cancelled}})
     {:noreply, %{state | enchant_scroll_id: nil}}
+  end
+
+  # ---- RequestDestroyItem (0x59) — delete item from inventory -----------
+
+  defp handle_packet(
+         %L2E.Packet.Client.RequestDestroyItem{object_id: obj_id, count: count},
+         %{auth_state: :in_world} = state
+       ) do
+    case Inventory.remove_item(state.char_id, obj_id, max(1, count)) do
+      {:ok, {instance, template}} ->
+        pkt = %Server.InventoryUpdate{changes: [{3, instance, template}]}
+        send(state.conn_pid, {:send_packet, pkt})
+
+      {:error, _} ->
+        :ok
+    end
+
+    {:noreply, state}
+  end
+
+  # ---- RequestDropItem (0x12) — drop item to ground ----------------------
+
+  defp handle_packet(
+         %L2E.Packet.Client.RequestDropItem{object_id: obj_id, count: count, x: x, y: y, z: z},
+         %{auth_state: :in_world} = state
+       ) do
+    case Inventory.remove_item(state.char_id, obj_id, max(1, count)) do
+      {:ok, {instance, template}} ->
+        pkt = %Server.InventoryUpdate{changes: [{3, instance, template}]}
+        send(state.conn_pid, {:send_packet, pkt})
+
+        if state.region_pid do
+          drop_obj_id = :erlang.unique_integer([:positive, :monotonic])
+          GenServer.cast(
+            state.region_pid,
+            {:drop_item, drop_obj_id, template.item_id, x, y, z, instance.count}
+          )
+        end
+
+      {:error, _} ->
+        :ok
+    end
+
+    {:noreply, state}
   end
 
   defp handle_packet(%L2E.Packet.Client.RequestSkillList{}, %{auth_state: :in_world} = state) do
@@ -1706,7 +1911,10 @@ defmodule L2E.Session.PlayerSession do
         mp: state.mp,
         exp: state.exp,
         sp: state.sp,
-        level: state.level
+        level: state.level,
+        karma: state.karma,
+        pvp_kills: state.pvp_kills,
+        pk_kills: state.pk_kills
       ]
     )
   end
@@ -1779,6 +1987,39 @@ defmodule L2E.Session.PlayerSession do
       [] -> nil
     end
   end
+
+  defp find_player_pid(char_id) do
+    case Registry.lookup(L2E.Session.Registry, char_id) do
+      [{pid, _}] -> pid
+      [] -> nil
+    end
+  end
+
+  # Returns true if `pid` is a registered PlayerSession (not an NPC or other process)
+  defp player_pid?(pid) when is_pid(pid) do
+    Registry.keys(L2E.Session.Registry, pid) != []
+  end
+
+  defp player_pid?(_), do: false
+
+  # Broadcast current UserInfo to this player (and nearby via region if needed)
+  defp broadcast_user_info(%{auth_state: :in_world} = state) do
+    pkt = %Server.UserInfo{
+      char_id: state.char_id,
+      char_name: state.char_name,
+      x: elem(state.position, 0),
+      y: elem(state.position, 1),
+      z: elem(state.position, 2),
+      heading: state.heading,
+      hp: trunc(state.hp),
+      max_hp: state.max_hp,
+      pvp_flag: state.pvp_flag,
+      karma: state.karma
+    }
+    send(state.conn_pid, {:send_packet, pkt})
+  end
+
+  defp broadcast_user_info(_state), do: :ok
 
   defp find_session_by_name(char_name) do
     # Iterate registry to find a session by character name

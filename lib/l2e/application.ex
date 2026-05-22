@@ -19,6 +19,7 @@ defmodule L2E.Application do
       L2E.Data.BuyListTable,
       L2E.Data.TeleporterTable,
       L2E.Data.EnchantData,
+      L2E.Data.DropTable,
       L2E.Zone.ZoneTable,
 
       # Registry for looking up PlayerSession pids by char_id

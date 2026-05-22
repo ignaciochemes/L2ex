@@ -27,7 +27,8 @@ defmodule L2E.Packet.Server.UserInfo do
   @behaviour L2E.Packet.Encodable
 
   # TODO: expand fields as character model grows
-  defstruct [:char_id, :char_name, :x, :y, :z, :heading, :hp, :max_hp]
+  defstruct [:char_id, :char_name, :x, :y, :z, :heading, :hp, :max_hp,
+             pvp_flag: 0, karma: 0]
   @type t :: %__MODULE__{}
 
   @opcode 0x04
@@ -35,10 +36,12 @@ defmodule L2E.Packet.Server.UserInfo do
   @spec encode(t()) :: binary()
   def encode(%__MODULE__{} = p) do
     name = encode_utf16(p.char_name)
+    pvp_flag = p.pvp_flag || 0
+    karma = p.karma || 0
 
     <<@opcode::8, p.x::little-32-signed, p.y::little-32-signed, p.z::little-32-signed,
       p.heading::little-32, p.char_id::little-32, name::binary, p.hp::little-32,
-      p.max_hp::little-32>>
+      p.max_hp::little-32, pvp_flag::little-32, karma::little-32>>
   end
 
   defp encode_utf16(nil), do: <<0::16>>
@@ -52,7 +55,7 @@ defmodule L2E.Packet.Server.CharInfo do
   @moduledoc "Sent to a player when another character enters their AOI."
   @behaviour L2E.Packet.Encodable
 
-  defstruct [:char_id, :char_name, :x, :y, :z, :heading]
+  defstruct [:char_id, :char_name, :x, :y, :z, :heading, pvp_flag: 0, karma: 0]
   @type t :: %__MODULE__{}
 
   @opcode 0x03
@@ -60,9 +63,12 @@ defmodule L2E.Packet.Server.CharInfo do
   @spec encode(t()) :: binary()
   def encode(%__MODULE__{} = p) do
     name = encode_utf16(p.char_name)
+    pvp_flag = p.pvp_flag || 0
+    karma = p.karma || 0
 
     <<@opcode::8, p.x::little-32-signed, p.y::little-32-signed, p.z::little-32-signed,
-      p.char_id::little-32, name::binary, p.heading::little-32>>
+      p.char_id::little-32, name::binary, p.heading::little-32,
+      pvp_flag::little-32, karma::little-32>>
   end
 
   defp encode_utf16(nil), do: <<0::16>>
