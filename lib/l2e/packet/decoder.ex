@@ -101,6 +101,24 @@ defmodule L2E.Packet.Decoder do
   def decode(0x96, body), do: Client.RequestPrivateStoreSell.decode(body)
   def decode(0x8D, body), do: Client.RequestPrivateStoreQuitBuy.decode(body)
 
+  # M60: Session lifecycle
+  def decode(0x09, body), do: Client.Logout.decode(body)
+  def decode(0x30, body), do: Client.Appearing.decode(body)
+  def decode(0x46, body), do: Client.RequestRestart.decode(body)
+  def decode(0x6D, body), do: Client.RequestRestartPoint.decode(body)
+
+  # M61: Movement
+  def decode(0x41, body), do: Client.MoveWithDelta.decode(body)
+  def decode(0x36, body), do: Client.CannotMoveAnymore.decode(body)
+  def decode(0x1B, body), do: Client.RequestSocialAction.decode(body)
+  def decode(0x1C, body), do: Client.ChangeMoveType2.decode(body)
+  def decode(0x1D, body), do: Client.ChangeWaitType2.decode(body)
+
+  # M62: Inventory actions
+  def decode(0x11, body), do: Client.RequestUnequipItem.decode(body)
+  def decode(0x72, body), do: Client.RequestCrystallizeItem.decode(body)
+  def decode(0x0F, body), do: Client.RequestItemList.decode(body)
+
   # M45: Class advancement
   def decode(0xBA, body), do: Client.RequestGotoLobby.decode(body)
 

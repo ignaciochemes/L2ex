@@ -2334,3 +2334,99 @@ defmodule L2E.Packet.Server.ExVariationResult do
     <<0xFE::8, 0x0055::little-16, p.stat12::little-32, p.stat34::little-32, p.result::little-32>>
   end
 end
+
+# ---------------------------------------------------------------------------
+# M60: RestartResponse (0x5F) — sent to confirm RequestRestart
+#
+# Binary layout:
+#   0x5F(8), response(8)  — response: 1=ok
+# ---------------------------------------------------------------------------
+defmodule L2E.Packet.Server.RestartResponse do
+  @moduledoc "Confirms a player's request to return to character select."
+
+  @behaviour L2E.Packet.Encodable
+
+  defstruct response: 1
+
+  @type t :: %__MODULE__{}
+
+  @impl L2E.Packet.Encodable
+  def encode(%__MODULE__{} = p) do
+    <<0x5F::8, p.response::8>>
+  end
+end
+
+# ---------------------------------------------------------------------------
+# M61: ChangeMoveType (0x30) — run/walk mode broadcast
+#
+# Binary layout:
+#   0x30(8), object_id(32LE), run_mode(32LE), x(32LE), y(32LE), z(32LE)
+#   run_mode: 1=running, 0=walking
+# ---------------------------------------------------------------------------
+defmodule L2E.Packet.Server.ChangeMoveType do
+  @moduledoc "Broadcasts a character's run/walk mode change to nearby players."
+
+  @behaviour L2E.Packet.Encodable
+
+  defstruct object_id: 0, run_mode: 1, x: 0, y: 0, z: 0
+
+  @type t :: %__MODULE__{}
+
+  @impl L2E.Packet.Encodable
+  def encode(%__MODULE__{} = p) do
+    <<0x30::8, p.object_id::little-32, p.run_mode::little-32,
+      p.x::little-32-signed, p.y::little-32-signed, p.z::little-32-signed>>
+  end
+end
+
+# ---------------------------------------------------------------------------
+# M61: ChangeWaitType (0x31) — sit/stand/fakedeath broadcast
+#
+# Binary layout:
+#   0x31(8), object_id(32LE), move_type(32LE), x(32LE), y(32LE), z(32LE)
+#   move_type: 0=standing, 1=sitting, 2=fakedeath
+# ---------------------------------------------------------------------------
+defmodule L2E.Packet.Server.ChangeWaitType do
+  @moduledoc "Broadcasts a character's sit/stand state to nearby players."
+
+  @behaviour L2E.Packet.Encodable
+
+  defstruct object_id: 0, move_type: 0, x: 0, y: 0, z: 0
+
+  @type t :: %__MODULE__{}
+
+  @impl L2E.Packet.Encodable
+  def encode(%__MODULE__{} = p) do
+    <<0x31::8, p.object_id::little-32, p.move_type::little-32,
+      p.x::little-32-signed, p.y::little-32-signed, p.z::little-32-signed>>
+  end
+end
+
+# ---------------------------------------------------------------------------
+# M63: RelationChanged (0x60) — relation bitmask broadcast
+#
+# Sent to nearby players when a player's relation changes (attack mode,
+# PvP flag, party membership). Clients use this to colour health bars.
+#
+# Binary layout:
+#   0x60(8), object_id(32LE), relation(32LE), auto_attackable(8), rec_hp_percent(8)
+#
+# relation bitmask (L2 Interlude):
+#   0x01 = party member, 0x02 = party leader, 0x04 = auto attackable,
+#   0x08 = PvP mode, 0x10 = dead, 0x40 = in combat
+# ---------------------------------------------------------------------------
+defmodule L2E.Packet.Server.RelationChanged do
+  @moduledoc "Notifies nearby clients of a relation/status change for an object."
+
+  @behaviour L2E.Packet.Encodable
+
+  defstruct object_id: 0, relation: 0, auto_attackable: 0, rec_hp_percent: 100
+
+  @type t :: %__MODULE__{}
+
+  @impl L2E.Packet.Encodable
+  def encode(%__MODULE__{} = p) do
+    <<0x60::8, p.object_id::little-32, p.relation::little-32,
+      p.auto_attackable::8, p.rec_hp_percent::8>>
+  end
+end

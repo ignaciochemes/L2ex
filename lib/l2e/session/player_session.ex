@@ -39,6 +39,7 @@ defmodule L2E.Session.PlayerSession do
   alias L2E.Zone.ZoneTable
   alias L2E.Data.SkillLearnTable
   alias L2E.Data.ClassAdvancementTable
+  alias L2E.Data.ExperienceLossData
   alias L2E.DB.CharacterSkill
   alias L2E.DB.CharacterQuest
   alias L2E.DB.CharacterShortcut
@@ -176,7 +177,10 @@ defmodule L2E.Session.PlayerSession do
       # M54: Shortcut bar — list of %{slot, page, type, shortcut_id, level}
       shortcuts: [],
       # M56: Henna/tattoo slots — %{1..3 => henna_id | nil}
-      hennas: %{1 => nil, 2 => nil, 3 => nil}
+      hennas: %{1 => nil, 2 => nil, 3 => nil},
+      # M61: Movement state
+      is_running: true,
+      is_sitting: false
     }
 
     {:ok, state}
@@ -240,7 +244,34 @@ defmodule L2E.Session.PlayerSession do
 
       maybe_drop_karma_items(state)
       Process.send_after(self(), :respawn, @respawn_ms)
-      {:noreply, %{new_state | dead: true, attacking: false, attack_timer: nil, regen_timer: nil}}
+
+      # XP loss on death (Interlude rules: % of XP within current level)
+      exp_loss = ExperienceLossData.calculate_exp_loss(state.exp, state.level)
+      level_floor_xp = L2E.Data.ExperienceTable.get_xp_for_level(state.level)
+      new_exp = max(state.exp - exp_loss, level_floor_xp)
+
+      if exp_loss > 0 and state.char_db_id do
+        Repo.update_all(
+          from(c in Character, where: c.id == ^state.char_db_id),
+          set: [exp: new_exp]
+        )
+
+        send(
+          state.conn_pid,
+          {:send_packet,
+           %Server.StatusUpdate{
+             object_id: state.char_id,
+             attributes: [{Server.StatusUpdate.attr_exp(), new_exp}]
+           }}
+        )
+
+        Logger.info(
+          "[PlayerSession] #{state.char_name} lost #{exp_loss} EXP on death (level #{state.level})"
+        )
+      end
+
+      {:noreply,
+       %{new_state | dead: true, attacking: false, attack_timer: nil, regen_timer: nil, exp: new_exp}}
     else
       {:noreply, new_state}
     end
@@ -3017,6 +3048,146 @@ defmodule L2E.Session.PlayerSession do
 
   defp handle_packet(%L2E.Packet.Client.RequestAcquireSkill{}, state), do: {:noreply, state}
 
+  # ---------------------------------------------------------------------------
+  # M60: Session lifecycle
+  # ---------------------------------------------------------------------------
+
+  defp handle_packet(%L2E.Packet.Client.Appearing{}, state) do
+    # Client confirmed it loaded the teleport destination — re-send char position
+    {x, y, z} = state.position
+    send(state.conn_pid, {:send_packet, %Server.TeleportToLocation{
+      object_id: state.char_id,
+      x: x,
+      y: y,
+      z: z
+    }})
+    {:noreply, state}
+  end
+
+  defp handle_packet(%L2E.Packet.Client.Logout{}, state) do
+    persist_position(state)
+    stop_inventory(state)
+    leave_region(state)
+    {:stop, :normal, state}
+  end
+
+  defp handle_packet(%L2E.Packet.Client.RequestRestart{}, state) do
+    persist_position(state)
+    stop_inventory(state)
+    leave_region(state)
+    send(state.conn_pid, {:send_packet, %Server.RestartResponse{response: 1}})
+    {:stop, :normal, state}
+  end
+
+  defp handle_packet(%L2E.Packet.Client.RequestRestartPoint{type: _type}, state) do
+    # Respawn at Giran (default); later: check clan hall, castle ownership
+    {rx, ry, rz} = {147_456, 23_040, -2_016}
+    new_state = %{state | position: {rx, ry, rz}, hp: state.max_hp, dead: false}
+    send(state.conn_pid, {:send_packet, %Server.TeleportToLocation{
+      object_id: new_state.char_id,
+      x: rx, y: ry, z: rz
+    }})
+    {:noreply, new_state}
+  end
+
+  # ---------------------------------------------------------------------------
+  # M61: Movement completeness
+  # ---------------------------------------------------------------------------
+
+  defp handle_packet(%L2E.Packet.Client.MoveWithDelta{dx: dx, dy: dy, dz: dz}, state) do
+    {ox, oy, oz} = state.position
+    {:noreply, %{state | position: {ox + dx, oy + dy, oz + dz}}}
+  end
+
+  defp handle_packet(%L2E.Packet.Client.CannotMoveAnymore{x: x, y: y, z: z, heading: h}, state) do
+    {:noreply, %{state | position: {x, y, z}, heading: h}}
+  end
+
+  defp handle_packet(%L2E.Packet.Client.RequestSocialAction{action_id: action_id}, state) do
+    if state.region_pid do
+      GenServer.cast(state.region_pid, {:broadcast_packet, %Server.SocialAction{
+        object_id: state.char_id,
+        action_id: action_id
+      }})
+    end
+    {:noreply, state}
+  end
+
+  defp handle_packet(%L2E.Packet.Client.ChangeMoveType2{move_type: move_type}, state) do
+    new_state = %{state | is_running: move_type == 1}
+    if state.region_pid do
+      {x, y, z} = state.position
+      GenServer.cast(state.region_pid, {:broadcast_packet, %Server.ChangeMoveType{
+        object_id: state.char_id,
+        run_mode: move_type,
+        x: x, y: y, z: z
+      }})
+    end
+    {:noreply, new_state}
+  end
+
+  defp handle_packet(%L2E.Packet.Client.ChangeWaitType2{move_type: move_type}, state) do
+    new_state = %{state | is_sitting: move_type == 1}
+    if state.region_pid do
+      {x, y, z} = state.position
+      GenServer.cast(state.region_pid, {:broadcast_packet, %Server.ChangeWaitType{
+        object_id: state.char_id,
+        move_type: move_type,
+        x: x, y: y, z: z
+      }})
+    end
+    {:noreply, new_state}
+  end
+
+  # ---------------------------------------------------------------------------
+  # M62: Inventory actions
+  # ---------------------------------------------------------------------------
+
+  defp handle_packet(%L2E.Packet.Client.RequestUnequipItem{slot: slot}, state) do
+    items = Inventory.get_items(state.char_id)
+    case Enum.find(items, fn {inst, tmpl} -> inst.is_equipped and tmpl.bodypart == slot end) do
+      {inst, _tmpl} ->
+        case Inventory.use_item(state.char_id, inst.id) do
+          {:ok, change_type, {instance, template}} ->
+            pkt = %Server.InventoryUpdate{changes: [{change_type_to_int(change_type), instance, template}]}
+            send(state.conn_pid, {:send_packet, pkt})
+            {:noreply, recalculate_stats_with_equipment(state)}
+          {:error, _} ->
+            send(state.conn_pid, {:send_packet, %Server.ActionFail{}})
+            {:noreply, state}
+        end
+      nil ->
+        {:noreply, state}
+    end
+  end
+
+  defp handle_packet(%L2E.Packet.Client.RequestCrystallizeItem{object_id: oid}, state) do
+    items = Inventory.get_items(state.char_id)
+    case Enum.find(items, fn {inst, _} -> inst.id == oid end) do
+      {_inst, template} when not is_nil(template) ->
+        {crystal_id, crystal_count} = crystal_data_for_grade(
+          Map.get(template, :grade, :none),
+          1
+        )
+        Inventory.remove_item(state.char_id, oid, 1)
+        Inventory.add_item(state.char_id, crystal_id, crystal_count)
+        new_items = Inventory.get_items(state.char_id)
+        send(state.conn_pid, {:send_packet, %Server.ItemList{items: new_items}})
+      _ ->
+        send(state.conn_pid, {:send_packet, %Server.ActionFail{}})
+    end
+    {:noreply, state}
+  end
+
+  defp handle_packet(%L2E.Packet.Client.RequestSaveInventoryOrder{}, state),
+    do: {:noreply, state}
+
+  defp handle_packet(%L2E.Packet.Client.RequestItemList{}, state) do
+    items = Inventory.get_items(state.char_id)
+    send(state.conn_pid, {:send_packet, %Server.ItemList{items: items}})
+    {:noreply, state}
+  end
+
   defp handle_packet(packet, state) do
     Logger.debug("[PlayerSession] Unhandled packet: #{inspect(packet.__struct__)}")
     {:noreply, state}
@@ -3341,6 +3512,14 @@ defmodule L2E.Session.PlayerSession do
       [] -> nil
     end
   end
+
+  # M62: Crystal item IDs by grade (Interlude item IDs)
+  defp crystal_data_for_grade(:d, count), do: {1458, max(1, count)}
+  defp crystal_data_for_grade(:c, count), do: {1459, max(1, count)}
+  defp crystal_data_for_grade(:b, count), do: {1460, max(1, count)}
+  defp crystal_data_for_grade(:a, count), do: {1461, max(1, count)}
+  defp crystal_data_for_grade(:s, count), do: {1462, max(1, count)}
+  defp crystal_data_for_grade(_, _), do: {1458, 1}
 
   defp resolve_char_id(pid) do
     case GenServer.call(pid, :get_party_info, 500) do
