@@ -2116,8 +2116,8 @@ defmodule L2E.Packet.Server.ShortcutInit do
   defp encode_shortcut(%{type: 2, slot: slot, page: page, shortcut_id: id}) do
     page_slot = slot + page * 12
 
-    <<2::little-32, page_slot::little-32, id::little-32, 1::little-32,
-      -1::little-32-signed, 0::little-32, 0::little-32, 0::little-16, 0::little-16>>
+    <<2::little-32, page_slot::little-32, id::little-32, 1::little-32, -1::little-32-signed,
+      0::little-32, 0::little-32, 0::little-16, 0::little-16>>
   end
 
   defp encode_shortcut(%{type: type, slot: slot, page: page, shortcut_id: id}) do
@@ -2233,8 +2233,8 @@ defmodule L2E.Packet.Server.MoveToPawn do
   def encode(%__MODULE__{} = p) do
     <<@opcode::8, p.follower_object_id::little-32, p.target_object_id::little-32,
       p.distance::little-32, p.follower_x::little-32-signed, p.follower_y::little-32-signed,
-      p.follower_z::little-32-signed, p.target_x::little-32-signed,
-      p.target_y::little-32-signed, p.target_z::little-32-signed>>
+      p.follower_z::little-32-signed, p.target_x::little-32-signed, p.target_y::little-32-signed,
+      p.target_z::little-32-signed>>
   end
 end
 
@@ -2262,8 +2262,8 @@ defmodule L2E.Packet.Server.RecipeItemMakeInfo do
     is_common = if p.is_common, do: 1, else: 0
     success = if p.success, do: 1, else: 0
 
-    <<@opcode::8, p.recipe_id::little-32, is_common::little-32,
-      p.current_mp::little-32, p.max_mp::little-32, success::little-32>>
+    <<@opcode::8, p.recipe_id::little-32, is_common::little-32, p.current_mp::little-32,
+      p.max_mp::little-32, success::little-32>>
   end
 end
 
@@ -2284,15 +2284,13 @@ defmodule L2E.Packet.Server.HennaInfo do
 
   @behaviour L2E.Packet.Encodable
 
-  defstruct [
-    int_bonus: 0,
-    str_bonus: 0,
-    con_bonus: 0,
-    men_bonus: 0,
-    dex_bonus: 0,
-    wit_bonus: 0,
-    hennas: []
-  ]
+  defstruct int_bonus: 0,
+            str_bonus: 0,
+            con_bonus: 0,
+            men_bonus: 0,
+            dex_bonus: 0,
+            wit_bonus: 0,
+            hennas: []
 
   @type t :: %__MODULE__{}
 
@@ -2308,10 +2306,9 @@ defmodule L2E.Packet.Server.HennaInfo do
         acc <> <<h.henna_id::little-32, h.dye_id::little-32, 1::8>>
       end)
 
-    <<@opcode::8,
-      p.int_bonus::8-signed, p.str_bonus::8-signed, p.con_bonus::8-signed,
-      p.men_bonus::8-signed, p.dex_bonus::8-signed, p.wit_bonus::8-signed,
-      3::little-32, henna_count::little-32, henna_bytes::binary>>
+    <<@opcode::8, p.int_bonus::8-signed, p.str_bonus::8-signed, p.con_bonus::8-signed,
+      p.men_bonus::8-signed, p.dex_bonus::8-signed, p.wit_bonus::8-signed, 3::little-32,
+      henna_count::little-32, henna_bytes::binary>>
   end
 end
 
@@ -2328,13 +2325,12 @@ defmodule L2E.Packet.Server.ExVariationResult do
 
   @behaviour L2E.Packet.Encodable
 
-  defstruct [stat12: 0, stat34: 0, result: 0]
+  defstruct stat12: 0, stat34: 0, result: 0
 
   @type t :: %__MODULE__{}
 
   @impl L2E.Packet.Encodable
   def encode(%__MODULE__{} = p) do
-    <<0xFE::8, 0x0055::little-16, p.stat12::little-32, p.stat34::little-32,
-      p.result::little-32>>
+    <<0xFE::8, 0x0055::little-16, p.stat12::little-32, p.stat34::little-32, p.result::little-32>>
   end
 end

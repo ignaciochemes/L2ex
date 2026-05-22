@@ -1704,7 +1704,10 @@ defmodule L2E.Session.PlayerSession do
          %L2E.Packet.Client.RequestActionUse{action_id: 2},
          %{auth_state: :in_world} = state
        ) do
-    Logger.debug("[PlayerSession] #{state.char_name} sit/stand toggle (no-op until ChangeWaitType)")
+    Logger.debug(
+      "[PlayerSession] #{state.char_name} sit/stand toggle (no-op until ChangeWaitType)"
+    )
+
     {:noreply, state}
   end
 

@@ -21,8 +21,9 @@ defmodule L2E.Packet.Client.RequestShortcutReg do
         }
 
   @impl L2E.Packet.Decodable
-  def decode(<<type::little-32, page_slot::little-32, id::little-32, level::little-32,
-               _::binary>>) do
+  def decode(
+        <<type::little-32, page_slot::little-32, id::little-32, level::little-32, _::binary>>
+      ) do
     {:ok,
      %__MODULE__{
        type: type,

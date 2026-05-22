@@ -307,7 +307,15 @@ defmodule L2E.NPC.Instance do
         new_state =
           if new_target == nil do
             cancel_timer(state.attack_timer)
-            %{state | hate_map: %{}, target_pid: nil, target_id: nil, ai_state: :idle, attack_timer: nil}
+
+            %{
+              state
+              | hate_map: %{},
+                target_pid: nil,
+                target_id: nil,
+                ai_state: :idle,
+                attack_timer: nil
+            }
           else
             %{state | hate_map: new_hate, target_pid: new_target}
           end

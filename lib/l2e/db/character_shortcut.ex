@@ -4,12 +4,12 @@ defmodule L2E.DB.CharacterShortcut do
   alias L2E.Repo
 
   schema "character_shortcuts" do
-    field :char_id, :integer
-    field :slot, :integer
-    field :page, :integer, default: 0
-    field :type, :integer
-    field :shortcut_id, :integer
-    field :level, :integer, default: 1
+    field(:char_id, :integer)
+    field(:slot, :integer)
+    field(:page, :integer, default: 0)
+    field(:type, :integer)
+    field(:shortcut_id, :integer)
+    field(:level, :integer, default: 1)
   end
 
   def load_for_character(char_id) do
