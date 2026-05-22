@@ -2513,3 +2513,390 @@ defmodule L2E.Packet.Server.QuestList do
     <<0x86::8, count::little-16, quests_bin::binary>>
   end
 end
+
+# ---- FASE 3: Friend packets --------------------------------------------------
+
+defmodule L2E.Packet.Server.FriendList do
+  @moduledoc "Opcode 0xFA — sends the full friend list to client on login."
+  @behaviour L2E.Packet.Encodable
+
+  @opcode 0xFA
+
+  defstruct friends: []
+
+  @impl L2E.Packet.Encodable
+  def encode(%__MODULE__{} = p) do
+    count = length(p.friends)
+
+    friends_bin =
+      Enum.reduce(p.friends, <<>>, fn f, acc ->
+        name_bin = utf16le_string(f.name)
+        online_int = if f.online, do: 1, else: 0
+        obj_id_online = if f.online, do: f.obj_id, else: 0
+
+        acc <>
+          <<f.obj_id::little-32>> <>
+          name_bin <>
+          <<online_int::little-32, obj_id_online::little-32>>
+      end)
+
+    <<@opcode::8, count::little-32>> <> friends_bin
+  end
+
+  defp utf16le_string(str) do
+    :unicode.characters_to_binary(str, :utf8, {:utf16, :little}) <> <<0::16>>
+  end
+end
+
+defmodule L2E.Packet.Server.L2Friend do
+  @moduledoc """
+  Opcode 0xFB — friend add/remove notification.
+
+  type: 1=add, 3=remove.
+  """
+  @behaviour L2E.Packet.Encodable
+
+  @opcode 0xFB
+
+  defstruct [:type, :obj_id, :name, :online]
+
+  @impl L2E.Packet.Encodable
+  def encode(%__MODULE__{} = p) do
+    name_bin = utf16le_string(p.name || "")
+    online_int = if p.online, do: 1, else: 0
+    obj_id_online = if p.online, do: p.obj_id, else: 0
+
+    <<@opcode::8, p.type::little-32, p.obj_id::little-32>> <>
+      name_bin <>
+      <<online_int::little-32, obj_id_online::little-32>>
+  end
+
+  defp utf16le_string(str) do
+    :unicode.characters_to_binary(str, :utf8, {:utf16, :little}) <> <<0::16>>
+  end
+end
+
+defmodule L2E.Packet.Server.FriendStatusPacket do
+  @moduledoc "Opcode 0xFC — notifies client that a friend came online or went offline."
+  @behaviour L2E.Packet.Encodable
+
+  @opcode 0xFC
+
+  defstruct [:obj_id, :name, :online]
+
+  @impl L2E.Packet.Encodable
+  def encode(%__MODULE__{} = p) do
+    online_int = if p.online, do: 1, else: 0
+    name_bin = utf16le_string(p.name || "")
+
+    <<@opcode::8, online_int::little-32>> <> name_bin <> <<p.obj_id::little-32>>
+  end
+
+  defp utf16le_string(str) do
+    :unicode.characters_to_binary(str, :utf8, {:utf16, :little}) <> <<0::16>>
+  end
+end
+
+defmodule L2E.Packet.Server.FriendRecvMsg do
+  @moduledoc "Opcode 0xFD — delivers a private friend message to the receiver."
+  @behaviour L2E.Packet.Encodable
+
+  @opcode 0xFD
+
+  defstruct [:receiver_name, :sender_name, :message]
+
+  @impl L2E.Packet.Encodable
+  def encode(%__MODULE__{} = p) do
+    receiver_bin = utf16le_string(p.receiver_name || "")
+    sender_bin = utf16le_string(p.sender_name || "")
+    message_bin = utf16le_string(p.message || "")
+
+    <<@opcode::8, 0::little-32>> <> receiver_bin <> sender_bin <> message_bin
+  end
+
+  defp utf16le_string(str) do
+    :unicode.characters_to_binary(str, :utf8, {:utf16, :little}) <> <<0::16>>
+  end
+end
+
+# ---- FASE 3: Pet Info --------------------------------------------------------
+
+defmodule L2E.Packet.Server.PetInfo do
+  @moduledoc "Opcode 0xB1 — full summon/pet state packet sent to owner and nearby players."
+  @behaviour L2E.Packet.Encodable
+
+  @opcode 0xB1
+
+  defstruct [
+    :summon_type,
+    :obj_id,
+    :npc_id,
+    :x,
+    :y,
+    :z,
+    :heading,
+    :m_atk_spd,
+    :p_atk_spd,
+    :run_spd,
+    :walk_spd,
+    :swim_run_spd,
+    :swim_walk_spd,
+    :fly_run_spd,
+    :fly_walk_spd,
+    :move_multiplier,
+    :atk_spd_multiplier,
+    :collision_radius,
+    :collision_height,
+    :weapon,
+    :armor,
+    :has_owner,
+    :is_running,
+    :in_combat,
+    :is_dead,
+    :summoned_value,
+    :name,
+    :title,
+    :pvp_flag,
+    :karma,
+    :cur_fed,
+    :max_fed,
+    :cur_hp,
+    :max_hp,
+    :cur_mp,
+    :max_mp,
+    :sp,
+    :level,
+    :exp,
+    :exp_this_level,
+    :exp_next_level,
+    :weight,
+    :max_load,
+    :p_atk,
+    :p_def,
+    :m_atk,
+    :m_def,
+    :accuracy,
+    :evasion,
+    :critical,
+    :move_speed,
+    :p_atk_spd2,
+    :m_atk_spd2,
+    :abnormal_visual_effects,
+    :mountable,
+    :zone_type,
+    :team,
+    :soul_shots_per_hit,
+    :spirit_shots_per_hit
+  ]
+
+  @impl L2E.Packet.Encodable
+  def encode(%__MODULE__{} = p) do
+    name_bin = utf16le_string(p.name || "")
+    title_bin = utf16le_string(p.title || "")
+    fly_run = p.fly_run_spd || 0
+    fly_walk = p.fly_walk_spd || 0
+
+    <<@opcode::8,
+      (p.summon_type || 0)::little-32,
+      (p.obj_id || 0)::little-32,
+      (p.npc_id || 0)::little-32,
+      0::little-32,
+      (p.x || 0)::little-32-signed,
+      (p.y || 0)::little-32-signed,
+      (p.z || 0)::little-32-signed,
+      (p.heading || 0)::little-32,
+      0::little-32,
+      (p.m_atk_spd || 0)::little-32,
+      (p.p_atk_spd || 0)::little-32,
+      (p.run_spd || 0)::little-32,
+      (p.walk_spd || 0)::little-32,
+      (p.swim_run_spd || 0)::little-32,
+      (p.swim_walk_spd || 0)::little-32,
+      fly_run::little-32,
+      fly_walk::little-32,
+      fly_run::little-32,
+      fly_walk::little-32,
+      (p.move_multiplier || 1.0)::little-float-64,
+      (p.atk_spd_multiplier || 1.0)::little-float-64,
+      (p.collision_radius || 0.0)::little-float-64,
+      (p.collision_height || 0.0)::little-float-64,
+      (p.weapon || 0)::little-32,
+      (p.armor || 0)::little-32,
+      0::little-32,
+      (p.has_owner || 0)::8,
+      (p.is_running || 0)::8,
+      (p.in_combat || 0)::8,
+      (p.is_dead || 0)::8,
+      (p.summoned_value || 1)::8>> <>
+      name_bin <>
+      title_bin <>
+      <<1::little-32,
+        (p.pvp_flag || 0)::little-32,
+        (p.karma || 0)::little-32,
+        (p.cur_fed || 0)::little-32,
+        (p.max_fed || 0)::little-32,
+        (p.cur_hp || 0)::little-32,
+        (p.max_hp || 0)::little-32,
+        (p.cur_mp || 0)::little-32,
+        (p.max_mp || 0)::little-32,
+        (p.sp || 0)::little-32,
+        (p.level || 1)::little-32,
+        (p.exp || 0)::little-64,
+        (p.exp_this_level || 0)::little-64,
+        (p.exp_next_level || 0)::little-64,
+        (p.weight || 0)::little-32,
+        (p.max_load || 0)::little-32,
+        (p.p_atk || 0)::little-32,
+        (p.p_def || 0)::little-32,
+        (p.m_atk || 0)::little-32,
+        (p.m_def || 0)::little-32,
+        (p.accuracy || 0)::little-32,
+        (p.evasion || 0)::little-32,
+        (p.critical || 0)::little-32,
+        (p.move_speed || 0)::little-32,
+        (p.p_atk_spd2 || 0)::little-32,
+        (p.m_atk_spd2 || 0)::little-32,
+        (p.abnormal_visual_effects || 0)::little-32,
+        (p.mountable || 0)::little-16,
+        (p.zone_type || 0)::8,
+        0::little-16,
+        (p.team || 0)::8,
+        (p.soul_shots_per_hit || 0)::little-32,
+        (p.spirit_shots_per_hit || 0)::little-32>>
+  end
+
+  defp utf16le_string(str) do
+    :unicode.characters_to_binary(str, :utf8, {:utf16, :little}) <> <<0::16>>
+  end
+end
+
+# ---- FASE 3: Siege Info ------------------------------------------------------
+
+defmodule L2E.Packet.Server.SiegeInfo do
+  @moduledoc """
+  Opcode 0xC9 — shows siege information for a castle or clan hall.
+
+  residence_id: castle or hall ID.
+  show_controls: 1 if viewer is the owning clan leader, 0 otherwise.
+  siege_times: optional list of unix timestamps (seconds) for time selection.
+  """
+  @behaviour L2E.Packet.Encodable
+
+  @opcode 0xC9
+
+  defstruct [
+    :residence_id,
+    :show_controls,
+    :owner_id,
+    :clan_name,
+    :leader_name,
+    :ally_id,
+    :ally_name,
+    :current_time,
+    :siege_time,
+    siege_times: []
+  ]
+
+  @impl L2E.Packet.Encodable
+  def encode(%__MODULE__{} = p) do
+    clan_name_bin = utf16le_string(p.clan_name || "")
+    leader_name_bin = utf16le_string(p.leader_name || "")
+    ally_name_bin = utf16le_string(p.ally_name || "")
+    times = p.siege_times || []
+    times_bin = Enum.reduce(times, <<>>, fn t, acc -> acc <> <<t::little-32>> end)
+
+    <<@opcode::8,
+      (p.residence_id || 0)::little-32,
+      (p.show_controls || 0)::little-32,
+      (p.owner_id || 0)::little-32>> <>
+      clan_name_bin <>
+      leader_name_bin <>
+      <<(p.ally_id || 0)::little-32>> <>
+      ally_name_bin <>
+      <<(p.current_time || 0)::little-32,
+        (p.siege_time || 0)::little-32,
+        length(times)::little-32>> <>
+      times_bin
+  end
+
+  defp utf16le_string(str) do
+    :unicode.characters_to_binary(str, :utf8, {:utf16, :little}) <> <<0::16>>
+  end
+end
+
+# ---- FASE 3: Duel packets (0xFE extended) ------------------------------------
+
+defmodule L2E.Packet.Server.ExDuelAskStart do
+  @moduledoc "0xFE/0x4B — duel request sent to target player."
+  @behaviour L2E.Packet.Encodable
+
+  defstruct [:requestor_name, :party_duel]
+
+  @impl L2E.Packet.Encodable
+  def encode(%__MODULE__{} = p) do
+    name_bin = utf16le_string(p.requestor_name || "")
+    party_duel = p.party_duel || 0
+
+    <<0xFE::8, 0x4B::little-16>> <> name_bin <> <<party_duel::little-32>>
+  end
+
+  defp utf16le_string(str) do
+    :unicode.characters_to_binary(str, :utf8, {:utf16, :little}) <> <<0::16>>
+  end
+end
+
+defmodule L2E.Packet.Server.ExDuelReady do
+  @moduledoc "0xFE/0x4C — signals that a duel is ready to start (party_duel: 1=party, 0=player)."
+  @behaviour L2E.Packet.Encodable
+
+  defstruct [:party_duel]
+
+  @impl L2E.Packet.Encodable
+  def encode(%__MODULE__{} = p) do
+    party_duel_int = if p.party_duel, do: 1, else: 0
+
+    <<0xFE::8, 0x4C::little-16, party_duel_int::little-32>>
+  end
+end
+
+defmodule L2E.Packet.Server.ExDuelStart do
+  @moduledoc "0xFE/0x4D — signals that a duel has started (party_duel: 1=party, 0=player)."
+  @behaviour L2E.Packet.Encodable
+
+  defstruct [:party_duel]
+
+  @impl L2E.Packet.Encodable
+  def encode(%__MODULE__{} = p) do
+    party_duel_int = if p.party_duel, do: 1, else: 0
+
+    <<0xFE::8, 0x4D::little-16, party_duel_int::little-32>>
+  end
+end
+
+defmodule L2E.Packet.Server.ExDuelEnd do
+  @moduledoc "0xFE/0x4E — signals that a duel has ended (party_duel: 1=party, 0=player)."
+  @behaviour L2E.Packet.Encodable
+
+  defstruct [:party_duel]
+
+  @impl L2E.Packet.Encodable
+  def encode(%__MODULE__{} = p) do
+    party_duel_int = if p.party_duel, do: 1, else: 0
+
+    <<0xFE::8, 0x4E::little-16, party_duel_int::little-32>>
+  end
+end
+
+# ---- FASE 3: Olympiad Mode ---------------------------------------------------
+
+defmodule L2E.Packet.Server.ExOlympiadMode do
+  @moduledoc "0xFE/0x2B — sets the client's Olympiad UI mode (0=off/return, 3=spectate)."
+  @behaviour L2E.Packet.Encodable
+
+  defstruct [:mode]
+
+  @impl L2E.Packet.Encodable
+  def encode(%__MODULE__{} = p) do
+    <<0xFE::8, 0x2B::little-16, (p.mode || 0)::8>>
+  end
+end

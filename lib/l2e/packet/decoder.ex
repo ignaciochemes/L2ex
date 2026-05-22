@@ -130,6 +130,20 @@ defmodule L2E.Packet.Decoder do
   def decode(0xBC, body), do: Client.RequestHennaEquip.decode(body)
   def decode(0xBF, body), do: Client.RequestHennaRemove.decode(body)
 
+  # M66: Friend system
+  def decode(0x5E, body), do: Client.RequestFriendInvite.decode(body)
+  def decode(0x5F, body), do: Client.RequestAnswerFriendInvite.decode(body)
+  def decode(0x60, body), do: Client.RequestFriendList.decode(body)
+  def decode(0x61, body), do: Client.RequestFriendDel.decode(body)
+  def decode(0xCC, body), do: Client.RequestSendFriendMsg.decode(body)
+
+  # M71: Siege
+  def decode(0x47, body), do: Client.RequestSiegeInfo.decode(body)
+
+  # M72: Pet
+  def decode(0x8A, body), do: Client.RequestPetUseItem.decode(body)
+  def decode(0x8F, body), do: Client.RequestPetGetItem.decode(body)
+
   # ── Extended two-byte opcode space (0xD0 prefix) ────────────────────────────
   # Body starts with a little-endian 16-bit sub-opcode, then the real payload.
 
@@ -149,6 +163,14 @@ defmodule L2E.Packet.Decoder do
   # M56: Augmentation — confirm life stone selection + perform augment
   defp decode_ext(0x2A, body), do: Client.RequestConfirmRefinerItem.decode(body)
   defp decode_ext(0x2C, body), do: Client.RequestRefine.decode(body)
+
+  # M69: Duel (extended)
+  defp decode_ext(0x27, body), do: Client.RequestDuelStart.decode(body)
+  defp decode_ext(0x28, body), do: Client.RequestDuelAnswerStart.decode(body)
+  defp decode_ext(0x30, body), do: Client.RequestDuelSurrender.decode(body)
+
+  # M70: Olympiad (extended)
+  defp decode_ext(0x13, body), do: Client.RequestOlympiadMatchList.decode(body)
 
   defp decode_ext(_sub, _body), do: {:error, :unknown_opcode}
 end

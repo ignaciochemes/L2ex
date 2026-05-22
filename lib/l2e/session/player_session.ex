@@ -22,6 +22,7 @@ defmodule L2E.Session.PlayerSession do
 
   alias L2E.{Repo, DB.Account, DB.Character, DB.Item}
   alias L2E.Packet.Server
+  alias L2E.Packet.Client
   alias L2E.World.Region
   alias L2E.Game.{ClassTemplates, Stats}
   alias L2E.Combat.Resolver
@@ -44,6 +45,12 @@ defmodule L2E.Session.PlayerSession do
   alias L2E.DB.CharacterSkill
   alias L2E.DB.CharacterQuest
   alias L2E.DB.CharacterShortcut
+  alias L2E.DB.CharacterFriend
+  alias L2E.DB.CharacterSubclass
+  alias L2E.Duel.Manager, as: DuelManager
+  alias L2E.Olympiad.Manager, as: OlympiadManager
+  alias L2E.Siege.Manager, as: SiegeManager
+  alias L2E.Pet.Supervisor, as: PetSupervisor
 
   # Respawn delay after death (ms)
   @respawn_ms 30_000
@@ -181,7 +188,18 @@ defmodule L2E.Session.PlayerSession do
       hennas: %{1 => nil, 2 => nil, 3 => nil},
       # M61: Movement state
       is_running: true,
-      is_sitting: false
+      is_sitting: false,
+      # M66: Friend system
+      friends_loaded: false,
+      # M68: Sub-class system
+      subclasses: [],
+      active_subclass: nil,
+      # M69: Duel state
+      pending_duel: nil,
+      active_duel_id: nil,
+      # M72: Pet
+      pet_pid: nil,
+      pet_item_obj_id: nil
     }
 
     {:ok, state}
@@ -1131,6 +1149,94 @@ defmodule L2E.Session.PlayerSession do
     end
   end
 
+  # ---- M66: Friend handle_info -----------------------------------------------
+
+  def handle_info({:friend_invite, inviter_id, inviter_name}, state) do
+    # Store pending invite and ask the player (client shows a dialog)
+    # L2 protocol: the client accepts with RequestAnswerFriendInvite
+    send(state.conn_pid, {:send_packet, %Server.L2Friend{
+      type: 1,
+      obj_id: inviter_id,
+      name: inviter_name,
+      online: true
+    }})
+
+    {:noreply, Map.put(state, :pending_friend_invite, {inviter_id, inviter_name})}
+  end
+
+  def handle_info({:friend_added, friend_id, friend_name}, state) do
+    send(state.conn_pid, {:send_packet, %Server.L2Friend{
+      type: 1,
+      obj_id: friend_id,
+      name: friend_name,
+      online: true
+    }})
+
+    {:noreply, state}
+  end
+
+  def handle_info({:friend_msg, sender_name, message}, state) do
+    send(state.conn_pid, {:send_packet, %Server.FriendRecvMsg{
+      receiver_name: state.char_name,
+      sender_name: sender_name,
+      message: message
+    }})
+
+    {:noreply, state}
+  end
+
+  def handle_info({:friend_online, friend_id, friend_name}, state) do
+    send(state.conn_pid, {:send_packet, %Server.FriendStatusPacket{
+      obj_id: friend_id,
+      name: friend_name,
+      online: true
+    }})
+
+    {:noreply, state}
+  end
+
+  def handle_info({:friend_offline, friend_id, friend_name}, state) do
+    send(state.conn_pid, {:send_packet, %Server.FriendStatusPacket{
+      obj_id: friend_id,
+      name: friend_name,
+      online: false
+    }})
+
+    {:noreply, state}
+  end
+
+  # ---- M69: Duel handle_info -------------------------------------------------
+
+  def handle_info({:duel_invite, inviter_id, inviter_name, party_duel}, state) do
+    send(state.conn_pid, {:send_packet, %Server.ExDuelAskStart{
+      requestor_name: inviter_name,
+      party_duel: party_duel
+    }})
+
+    {:noreply, %{state | pending_duel: {inviter_id, inviter_name, party_duel}}}
+  end
+
+  def handle_info({:duel_start, duel_id, party_duel}, state) do
+    send(state.conn_pid, {:send_packet, %Server.ExDuelReady{party_duel: party_duel}})
+    send(state.conn_pid, {:send_packet, %Server.ExDuelStart{party_duel: party_duel}})
+    {:noreply, %{state | active_duel_id: duel_id, pending_duel: nil}}
+  end
+
+  def handle_info({:duel_end, party_duel}, state) do
+    send(state.conn_pid, {:send_packet, %Server.ExDuelEnd{party_duel: party_duel}})
+    {:noreply, %{state | active_duel_id: nil}}
+  end
+
+  # ---- M72: Pet handle_info --------------------------------------------------
+
+  def handle_info({:pet_spawned, pet_pid, pet_item_obj_id}, state) do
+    {:noreply, %{state | pet_pid: pet_pid, pet_item_obj_id: pet_item_obj_id}}
+  end
+
+  def handle_info({:pet_despawned}, state) do
+    {:noreply, %{state | pet_pid: nil, pet_item_obj_id: nil}}
+  end
+
   def handle_info(msg, state) do
     Logger.debug("[PlayerSession] Unexpected message: #{inspect(msg)}")
     {:noreply, state}
@@ -1488,6 +1594,9 @@ defmodule L2E.Session.PlayerSession do
       |> Enum.map(fn {quest_id, q} -> %{quest_id: quest_id, cond: q.cond} end)
 
     send(state.conn_pid, {:send_packet, %Server.QuestList{quests: active_quests}})
+
+    # M66: Send empty friend list on enter world (full load deferred)
+    send(state.conn_pid, {:send_packet, %Server.FriendList{friends: []}})
 
     Logger.info(
       "[PlayerSession] #{char_name} (id=#{char_id}) entered the world (class=#{state.class_id}, level=#{state.level})"
@@ -3235,6 +3344,197 @@ defmodule L2E.Session.PlayerSession do
     end
 
     {:noreply, state}
+  end
+
+  # ---- M66: Friend list -------------------------------------------------------
+
+  defp handle_packet(%Client.RequestFriendList{}, state) do
+    friends = CharacterFriend.load_for_character(state.char_id)
+
+    friends_data =
+      Enum.map(friends, fn f ->
+        online =
+          case Registry.lookup(L2E.Session.Registry, f.friend_id) do
+            [{_pid, _}] -> true
+            [] -> false
+          end
+
+        %{obj_id: f.friend_id, name: f.friend_name, online: online}
+      end)
+
+    send(state.conn_pid, {:send_packet, %Server.FriendList{friends: friends_data}})
+    {:noreply, state}
+  end
+
+  defp handle_packet(%Client.RequestFriendInvite{name: name}, state) do
+    case Registry.lookup(L2E.Session.Registry, name) do
+      [{target_pid, _}] ->
+        send(target_pid, {:friend_invite, state.char_id, state.char_name})
+
+      [] ->
+        Logger.debug("[PlayerSession] Friend invite: #{name} not online")
+    end
+
+    {:noreply, state}
+  end
+
+  defp handle_packet(%Client.RequestAnswerFriendInvite{response: response}, state) do
+    case Map.get(state, :pending_friend_invite) do
+      nil ->
+        {:noreply, state}
+
+      {inviter_id, inviter_name} ->
+        if response == 1 do
+          CharacterFriend.add(state.char_id, inviter_id, inviter_name)
+          CharacterFriend.add(inviter_id, state.char_id, state.char_name)
+
+          send(state.conn_pid, {:send_packet, %Server.L2Friend{
+            type: 1,
+            obj_id: inviter_id,
+            name: inviter_name,
+            online: true
+          }})
+
+          case Registry.lookup(L2E.Session.Registry, inviter_id) do
+            [{inviter_pid, _}] ->
+              send(inviter_pid, {:friend_added, state.char_id, state.char_name})
+
+            [] -> :ok
+          end
+        end
+
+        {:noreply, Map.delete(state, :pending_friend_invite)}
+    end
+  end
+
+  defp handle_packet(%Client.RequestFriendDel{name: name}, state) do
+    friends = CharacterFriend.load_for_character(state.char_id)
+
+    case Enum.find(friends, fn f -> f.friend_name == name end) do
+      nil ->
+        {:noreply, state}
+
+      friend ->
+        CharacterFriend.remove(state.char_id, friend.friend_id)
+        CharacterFriend.remove(friend.friend_id, state.char_id)
+
+        send(state.conn_pid, {:send_packet, %Server.L2Friend{
+          type: 3,
+          obj_id: friend.friend_id,
+          name: friend.friend_name,
+          online: false
+        }})
+
+        {:noreply, state}
+    end
+  end
+
+  defp handle_packet(%Client.RequestSendFriendMsg{char_name: target_name, message: message}, state) do
+    case Registry.lookup(L2E.Session.Registry, target_name) do
+      [{target_pid, _}] ->
+        send(target_pid, {:friend_msg, state.char_name, message})
+
+      [] ->
+        Logger.debug("[PlayerSession] SendFriendMsg: #{target_name} not online")
+    end
+
+    {:noreply, state}
+  end
+
+  # ---- M68: Sub-class ---------------------------------------------------------
+  # Sub-classes are loaded on EnterWorld — no dedicated client packet in M68 foundation.
+
+  # ---- M69: Duel --------------------------------------------------------------
+
+  defp handle_packet(%Client.RequestDuelStart{target_name: target_name, party_duel: party_duel}, state) do
+    if DuelManager.in_duel?(state.char_id) do
+      {:noreply, state}
+    else
+      case Registry.lookup(L2E.Session.Registry, target_name) do
+        [{target_pid, _}] ->
+          send(target_pid, {:duel_invite, state.char_id, state.char_name, party_duel})
+
+        [] ->
+          Logger.debug("[PlayerSession] DuelStart: #{target_name} not online")
+      end
+
+      {:noreply, state}
+    end
+  end
+
+  defp handle_packet(%Client.RequestDuelAnswerStart{response: response}, state) do
+    case state.pending_duel do
+      nil ->
+        {:noreply, state}
+
+      {inviter_id, _inviter_name, party_duel} ->
+        if response == 1 do
+          case Registry.lookup(L2E.Session.Registry, inviter_id) do
+            [{inviter_pid, _}] ->
+              duel_id = DuelManager.new_duel_id()
+              L2E.Duel.Supervisor.start_duel(duel_id, inviter_pid, self())
+
+              send(inviter_pid, {:duel_start, duel_id, party_duel})
+              send(self(), {:duel_start, duel_id, party_duel})
+
+            [] ->
+              Logger.debug("[PlayerSession] DuelAnswer: inviter #{inviter_id} not online")
+          end
+        end
+
+        {:noreply, %{state | pending_duel: nil}}
+    end
+  end
+
+  defp handle_packet(%Client.RequestDuelSurrender{}, state) do
+    case state.active_duel_id do
+      nil ->
+        {:noreply, state}
+
+      duel_id ->
+        L2E.Duel.Session.surrender(duel_id, state.char_id)
+        {:noreply, state}
+    end
+  end
+
+  # ---- M70: Olympiad ----------------------------------------------------------
+
+  defp handle_packet(%Client.RequestOlympiadMatchList{}, state) do
+    mode = if OlympiadManager.active?(), do: 3, else: 0
+    send(state.conn_pid, {:send_packet, %Server.ExOlympiadMode{mode: mode}})
+    {:noreply, state}
+  end
+
+  # ---- M71: Siege -------------------------------------------------------------
+  # RequestSiegeInfo (0x47) has no body in Interlude — just acknowledges.
+  # Return basic info for all castles in a future pass; for now, no-op.
+
+  defp handle_packet(%Client.RequestSiegeInfo{}, state) do
+    {:noreply, state}
+  end
+
+  # ---- M72: Pet ---------------------------------------------------------------
+
+  defp handle_packet(%Client.RequestPetUseItem{object_id: object_id}, state) do
+    case state.pet_pid do
+      nil ->
+        {:noreply, state}
+
+      pet_pid ->
+        send(pet_pid, {:use_item, object_id})
+        {:noreply, state}
+    end
+  end
+
+  defp handle_packet(%Client.RequestPetGetItem{object_id: object_id}, state) do
+    case state.pet_pid do
+      nil ->
+        {:noreply, state}
+
+      pet_pid ->
+        send(pet_pid, {:pickup_item, object_id})
+        {:noreply, state}
+    end
   end
 
   defp handle_packet(packet, state) do

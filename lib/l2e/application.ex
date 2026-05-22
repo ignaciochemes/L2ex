@@ -31,6 +31,23 @@ defmodule L2E.Application do
       L2E.Data.ArmorSetData,
       L2E.Data.MultisellTable,
 
+      # M68: Sub-class data
+      L2E.Data.SubclassData,
+
+      # M69: Duel system
+      {Registry, keys: :unique, name: L2E.Duel.Registry},
+      L2E.Duel.Manager,
+      L2E.Duel.Supervisor,
+
+      # M70: Olympiad
+      L2E.Olympiad.Supervisor,
+
+      # M72: Pet system
+      L2E.Pet.Supervisor,
+
+      # M71: Siege system
+      L2E.Siege.Supervisor,
+
       # M50: Quest script registry — ETS-backed, must start before any player session
       L2E.Quest.Registry,
 
