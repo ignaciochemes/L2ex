@@ -40,6 +40,7 @@ defmodule L2E.Session.PlayerSession do
   alias L2E.Data.SkillLearnTable
   alias L2E.Data.ClassAdvancementTable
   alias L2E.Data.ExperienceLossData
+  alias L2E.Data.MultisellTable
   alias L2E.DB.CharacterSkill
   alias L2E.DB.CharacterQuest
   alias L2E.DB.CharacterShortcut
@@ -1479,6 +1480,14 @@ defmodule L2E.Session.PlayerSession do
     shortcuts = load_char_shortcuts(char_id)
     shortcut_init = %Server.ShortcutInit{shortcuts: shortcuts}
     send(state.conn_pid, {:send_packet, shortcut_init})
+
+    # M67: Send QuestList — active quests for the quest journal
+    active_quests =
+      quests
+      |> Enum.filter(fn {_id, q} -> q.state == 1 end)
+      |> Enum.map(fn {quest_id, q} -> %{quest_id: quest_id, cond: q.cond} end)
+
+    send(state.conn_pid, {:send_packet, %Server.QuestList{quests: active_quests}})
 
     Logger.info(
       "[PlayerSession] #{char_name} (id=#{char_id}) entered the world (class=#{state.class_id}, level=#{state.level})"
@@ -3185,6 +3194,46 @@ defmodule L2E.Session.PlayerSession do
   defp handle_packet(%L2E.Packet.Client.RequestItemList{}, state) do
     items = Inventory.get_items(state.char_id)
     send(state.conn_pid, {:send_packet, %Server.ItemList{items: items}})
+    {:noreply, state}
+  end
+
+  # M64: MultiSell — player executes a multisell exchange
+  defp handle_packet(
+         %L2E.Packet.Client.MultiSellChoose{list_id: list_id, entry_id: entry_id},
+         state
+       ) do
+    case MultisellTable.get(list_id) do
+      nil ->
+        send(state.conn_pid, {:send_packet, %Server.ActionFail{}})
+
+      list ->
+        case Enum.find(list.entries, &(&1.entry_id == entry_id)) do
+          nil ->
+            send(state.conn_pid, {:send_packet, %Server.ActionFail{}})
+
+          entry ->
+            has_all =
+              Enum.all?(entry.ingredients, fn {item_id, needed} ->
+                Inventory.count_item(state.char_id, item_id) >= needed
+              end)
+
+            if has_all do
+              Enum.each(entry.ingredients, fn {item_id, count} ->
+                Inventory.remove_item_by_template(state.char_id, item_id, count)
+              end)
+
+              Enum.each(entry.products, fn {item_id, count} ->
+                Inventory.add_item(state.char_id, item_id, count)
+              end)
+
+              items = Inventory.get_items(state.char_id)
+              send(state.conn_pid, {:send_packet, %Server.ItemList{items: items}})
+            else
+              send(state.conn_pid, {:send_packet, %Server.ActionFail{}})
+            end
+        end
+    end
+
     {:noreply, state}
   end
 

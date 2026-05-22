@@ -119,6 +119,9 @@ defmodule L2E.Packet.Decoder do
   def decode(0x72, body), do: Client.RequestCrystallizeItem.decode(body)
   def decode(0x0F, body), do: Client.RequestItemList.decode(body)
 
+  # M64: MultiSell
+  def decode(0x64, body), do: Client.MultiSellChoose.decode(body)
+
   # M45: Class advancement
   def decode(0xBA, body), do: Client.RequestGotoLobby.decode(body)
 

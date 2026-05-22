@@ -94,6 +94,19 @@ defmodule L2E.Inventory do
     GenServer.call(via_tuple(char_id), {:remove_item, item_instance_id, count})
   end
 
+  @doc "Returns the total count of items with the given `item_id` (template) in inventory."
+  @spec count_item(pos_integer(), pos_integer()) :: non_neg_integer()
+  def count_item(char_id, item_id) do
+    GenServer.call(via_tuple(char_id), {:count_item, item_id})
+  end
+
+  @doc "Removes `count` of item matching `item_id` (template) from inventory."
+  @spec remove_item_by_template(pos_integer(), pos_integer(), pos_integer()) ::
+          {:ok, :modified | :removed, {Instance.t(), Template.t()}} | {:error, term()}
+  def remove_item_by_template(char_id, item_id, count) do
+    GenServer.call(via_tuple(char_id), {:remove_item_by_template, item_id, count})
+  end
+
   @doc "Updates the enchant level of the given item instance (by object_id)."
   @spec update_enchant(pos_integer(), pos_integer(), non_neg_integer()) :: :ok
   def update_enchant(char_id, object_id, enchant_level) do
@@ -230,6 +243,51 @@ defmodule L2E.Inventory do
           true ->
             Repo.delete_all(from(i in Item, where: i.id == ^item_instance_id))
             new_items = Map.delete(state.items, item_instance_id)
+            {:reply, {:ok, :removed, {instance, template}}, %{state | items: new_items}}
+        end
+    end
+  end
+
+  def handle_call({:count_item, item_id}, _from, state) do
+    count =
+      Enum.reduce(state.items, 0, fn {_, inst}, acc ->
+        if inst.item_id == item_id, do: acc + (inst.count || 1), else: acc
+      end)
+
+    {:reply, count, state}
+  end
+
+  def handle_call({:remove_item_by_template, item_id, count}, _from, state) do
+    case Enum.find(state.items, fn {_, inst} -> inst.item_id == item_id end) do
+      nil ->
+        {:reply, {:error, :not_found}, state}
+
+      {inst_id, instance} ->
+        template = TemplateTable.get(item_id)
+
+        cond do
+          is_nil(template) ->
+            {:reply, {:error, :no_template}, state}
+
+          template.stackable ->
+            new_count = (instance.count || 1) - count
+
+            if new_count <= 0 do
+              Repo.delete_all(from(i in Item, where: i.id == ^inst_id))
+              new_items = Map.delete(state.items, inst_id)
+
+              {:reply, {:ok, :removed, {%{instance | count: 0}, template}},
+               %{state | items: new_items}}
+            else
+              Repo.update_all(from(i in Item, where: i.id == ^inst_id), set: [count: new_count])
+              updated = %{instance | count: new_count}
+              new_items = Map.put(state.items, inst_id, updated)
+              {:reply, {:ok, :modified, {updated, template}}, %{state | items: new_items}}
+            end
+
+          true ->
+            Repo.delete_all(from(i in Item, where: i.id == ^inst_id))
+            new_items = Map.delete(state.items, inst_id)
             {:reply, {:ok, :removed, {instance, template}}, %{state | items: new_items}}
         end
     end

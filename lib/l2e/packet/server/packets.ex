@@ -2430,3 +2430,86 @@ defmodule L2E.Packet.Server.RelationChanged do
       p.auto_attackable::8, p.rec_hp_percent::8>>
   end
 end
+
+# ---------------------------------------------------------------------------
+# M64: MultiSellList (0xFE/0x000B) — sends a multisell exchange list to client
+#
+# Binary layout (extended packet):
+#   0xFE(8), 0x000B(16LE), list_id(32LE), page(8=0), entry_count(16LE),
+#   for each entry:
+#     entry_id(32LE), adena_cost(32LE=0), product_count(16LE),
+#     for each product:
+#       item_id(32LE), count(32LE), item_type(32LE=0),
+#     ingredient_count(16LE),
+#     for each ingredient:
+#       item_id(32LE), count(32LE), item_type(32LE=0)
+# ---------------------------------------------------------------------------
+defmodule L2E.Packet.Server.MultiSellList do
+  @moduledoc "Sends a multisell exchange list to the client for display."
+
+  @behaviour L2E.Packet.Encodable
+
+  defstruct list_id: 0, entries: []
+
+  @type t :: %__MODULE__{}
+
+  @impl L2E.Packet.Encodable
+  def encode(%__MODULE__{} = p) do
+    entry_count = length(p.entries)
+    entries_bin = encode_entries(p.entries)
+
+    <<0xFE::8, 0x000B::little-16, p.list_id::little-32, 0::8,
+      entry_count::little-16, entries_bin::binary>>
+  end
+
+  defp encode_entries(entries) do
+    Enum.reduce(entries, <<>>, fn entry, acc ->
+      products_bin = encode_items(entry.products)
+      ingredients_bin = encode_items(entry.ingredients)
+      product_count = length(entry.products)
+      ingredient_count = length(entry.ingredients)
+
+      acc <>
+        <<entry.entry_id::little-32, 0::little-32,
+          product_count::little-16, products_bin::binary,
+          ingredient_count::little-16, ingredients_bin::binary>>
+    end)
+  end
+
+  defp encode_items(items) do
+    Enum.reduce(items, <<>>, fn {item_id, count}, acc ->
+      acc <> <<item_id::little-32, count::little-32, 0::little-32>>
+    end)
+  end
+end
+
+# ---------------------------------------------------------------------------
+# M67: QuestList (0x86) — sends the player's active quest list on login
+#
+# Binary layout:
+#   0x86(8), count(16LE),
+#   for each quest:
+#     quest_id(32LE), cond(32LE)
+# ---------------------------------------------------------------------------
+defmodule L2E.Packet.Server.QuestList do
+  @moduledoc "Sends the player's active and completed quest list on login/refresh."
+
+  @behaviour L2E.Packet.Encodable
+
+  # quests: list of %{quest_id: int, cond: int}
+  defstruct quests: []
+
+  @type t :: %__MODULE__{}
+
+  @impl L2E.Packet.Encodable
+  def encode(%__MODULE__{} = p) do
+    count = length(p.quests)
+
+    quests_bin =
+      Enum.reduce(p.quests, <<>>, fn q, acc ->
+        acc <> <<q.quest_id::little-32, q.cond::little-32>>
+      end)
+
+    <<0x86::8, count::little-16, quests_bin::binary>>
+  end
+end

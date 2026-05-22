@@ -28,6 +28,8 @@ defmodule L2E.Application do
       L2E.Data.RecipeTable,
       L2E.Data.OptionTable,
       L2E.Data.ExperienceLossData,
+      L2E.Data.ArmorSetData,
+      L2E.Data.MultisellTable,
 
       # M50: Quest script registry — ETS-backed, must start before any player session
       L2E.Quest.Registry,
