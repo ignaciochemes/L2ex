@@ -72,7 +72,12 @@ defmodule L2E.Duel.Session do
     }
 
     # Register in manager
-    L2E.Duel.Manager.register(duel_id, self(), get_char_id(attacker_pid), get_char_id(defender_pid))
+    L2E.Duel.Manager.register(
+      duel_id,
+      self(),
+      get_char_id(attacker_pid),
+      get_char_id(defender_pid)
+    )
 
     {:ok, state}
   end
@@ -93,13 +98,21 @@ defmodule L2E.Duel.Session do
   end
 
   def handle_cast({:surrender, char_id}, %{phase: :active} = state) do
-    winner_pid = if char_id == get_char_id(state.attacker_pid), do: state.defender_pid, else: state.attacker_pid
+    winner_pid =
+      if char_id == get_char_id(state.attacker_pid),
+        do: state.defender_pid,
+        else: state.attacker_pid
+
     end_duel_with_winner(state, winner_pid, :surrender)
     {:stop, :normal, state}
   end
 
   def handle_cast({:player_died, char_id}, %{phase: :active} = state) do
-    winner_pid = if char_id == get_char_id(state.attacker_pid), do: state.defender_pid, else: state.attacker_pid
+    winner_pid =
+      if char_id == get_char_id(state.attacker_pid),
+        do: state.defender_pid,
+        else: state.attacker_pid
+
     end_duel_with_winner(state, winner_pid, :death)
     {:stop, :normal, state}
   end
@@ -137,13 +150,25 @@ defmodule L2E.Duel.Session do
   def handle_info(_, state), do: {:noreply, state}
 
   defp end_duel(state, reason) do
-    Process.send_after(state.attacker_pid, {:duel_event, :duel_ended, state.duel_id, :draw, reason}, 0)
-    Process.send_after(state.defender_pid, {:duel_event, :duel_ended, state.duel_id, :draw, reason}, 0)
+    Process.send_after(
+      state.attacker_pid,
+      {:duel_event, :duel_ended, state.duel_id, :draw, reason},
+      0
+    )
+
+    Process.send_after(
+      state.defender_pid,
+      {:duel_event, :duel_ended, state.duel_id, :draw, reason},
+      0
+    )
+
     L2E.Duel.Manager.unregister(state.duel_id)
   end
 
   defp end_duel_with_winner(state, winner_pid, reason) do
-    loser_pid = if winner_pid == state.attacker_pid, do: state.defender_pid, else: state.attacker_pid
+    loser_pid =
+      if winner_pid == state.attacker_pid, do: state.defender_pid, else: state.attacker_pid
+
     Process.send_after(winner_pid, {:duel_event, :duel_ended, state.duel_id, :win, reason}, 0)
     Process.send_after(loser_pid, {:duel_event, :duel_ended, state.duel_id, :lose, reason}, 0)
     L2E.Duel.Manager.unregister(state.duel_id)

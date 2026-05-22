@@ -290,7 +290,14 @@ defmodule L2E.Session.PlayerSession do
       end
 
       {:noreply,
-       %{new_state | dead: true, attacking: false, attack_timer: nil, regen_timer: nil, exp: new_exp}}
+       %{
+         new_state
+         | dead: true,
+           attacking: false,
+           attack_timer: nil,
+           regen_timer: nil,
+           exp: new_exp
+       }}
     else
       {:noreply, new_state}
     end
@@ -1154,53 +1161,73 @@ defmodule L2E.Session.PlayerSession do
   def handle_info({:friend_invite, inviter_id, inviter_name}, state) do
     # Store pending invite and ask the player (client shows a dialog)
     # L2 protocol: the client accepts with RequestAnswerFriendInvite
-    send(state.conn_pid, {:send_packet, %Server.L2Friend{
-      type: 1,
-      obj_id: inviter_id,
-      name: inviter_name,
-      online: true
-    }})
+    send(
+      state.conn_pid,
+      {:send_packet,
+       %Server.L2Friend{
+         type: 1,
+         obj_id: inviter_id,
+         name: inviter_name,
+         online: true
+       }}
+    )
 
     {:noreply, Map.put(state, :pending_friend_invite, {inviter_id, inviter_name})}
   end
 
   def handle_info({:friend_added, friend_id, friend_name}, state) do
-    send(state.conn_pid, {:send_packet, %Server.L2Friend{
-      type: 1,
-      obj_id: friend_id,
-      name: friend_name,
-      online: true
-    }})
+    send(
+      state.conn_pid,
+      {:send_packet,
+       %Server.L2Friend{
+         type: 1,
+         obj_id: friend_id,
+         name: friend_name,
+         online: true
+       }}
+    )
 
     {:noreply, state}
   end
 
   def handle_info({:friend_msg, sender_name, message}, state) do
-    send(state.conn_pid, {:send_packet, %Server.FriendRecvMsg{
-      receiver_name: state.char_name,
-      sender_name: sender_name,
-      message: message
-    }})
+    send(
+      state.conn_pid,
+      {:send_packet,
+       %Server.FriendRecvMsg{
+         receiver_name: state.char_name,
+         sender_name: sender_name,
+         message: message
+       }}
+    )
 
     {:noreply, state}
   end
 
   def handle_info({:friend_online, friend_id, friend_name}, state) do
-    send(state.conn_pid, {:send_packet, %Server.FriendStatusPacket{
-      obj_id: friend_id,
-      name: friend_name,
-      online: true
-    }})
+    send(
+      state.conn_pid,
+      {:send_packet,
+       %Server.FriendStatusPacket{
+         obj_id: friend_id,
+         name: friend_name,
+         online: true
+       }}
+    )
 
     {:noreply, state}
   end
 
   def handle_info({:friend_offline, friend_id, friend_name}, state) do
-    send(state.conn_pid, {:send_packet, %Server.FriendStatusPacket{
-      obj_id: friend_id,
-      name: friend_name,
-      online: false
-    }})
+    send(
+      state.conn_pid,
+      {:send_packet,
+       %Server.FriendStatusPacket{
+         obj_id: friend_id,
+         name: friend_name,
+         online: false
+       }}
+    )
 
     {:noreply, state}
   end
@@ -1208,10 +1235,14 @@ defmodule L2E.Session.PlayerSession do
   # ---- M69: Duel handle_info -------------------------------------------------
 
   def handle_info({:duel_invite, inviter_id, inviter_name, party_duel}, state) do
-    send(state.conn_pid, {:send_packet, %Server.ExDuelAskStart{
-      requestor_name: inviter_name,
-      party_duel: party_duel
-    }})
+    send(
+      state.conn_pid,
+      {:send_packet,
+       %Server.ExDuelAskStart{
+         requestor_name: inviter_name,
+         party_duel: party_duel
+       }}
+    )
 
     {:noreply, %{state | pending_duel: {inviter_id, inviter_name, party_duel}}}
   end
@@ -3173,12 +3204,18 @@ defmodule L2E.Session.PlayerSession do
   defp handle_packet(%L2E.Packet.Client.Appearing{}, state) do
     # Client confirmed it loaded the teleport destination — re-send char position
     {x, y, z} = state.position
-    send(state.conn_pid, {:send_packet, %Server.TeleportToLocation{
-      object_id: state.char_id,
-      x: x,
-      y: y,
-      z: z
-    }})
+
+    send(
+      state.conn_pid,
+      {:send_packet,
+       %Server.TeleportToLocation{
+         object_id: state.char_id,
+         x: x,
+         y: y,
+         z: z
+       }}
+    )
+
     {:noreply, state}
   end
 
@@ -3201,10 +3238,18 @@ defmodule L2E.Session.PlayerSession do
     # Respawn at Giran (default); later: check clan hall, castle ownership
     {rx, ry, rz} = {147_456, 23_040, -2_016}
     new_state = %{state | position: {rx, ry, rz}, hp: state.max_hp, dead: false}
-    send(state.conn_pid, {:send_packet, %Server.TeleportToLocation{
-      object_id: new_state.char_id,
-      x: rx, y: ry, z: rz
-    }})
+
+    send(
+      state.conn_pid,
+      {:send_packet,
+       %Server.TeleportToLocation{
+         object_id: new_state.char_id,
+         x: rx,
+         y: ry,
+         z: rz
+       }}
+    )
+
     {:noreply, new_state}
   end
 
@@ -3223,37 +3268,60 @@ defmodule L2E.Session.PlayerSession do
 
   defp handle_packet(%L2E.Packet.Client.RequestSocialAction{action_id: action_id}, state) do
     if state.region_pid do
-      GenServer.cast(state.region_pid, {:broadcast_packet, %Server.SocialAction{
-        object_id: state.char_id,
-        action_id: action_id
-      }})
+      GenServer.cast(
+        state.region_pid,
+        {:broadcast_packet,
+         %Server.SocialAction{
+           object_id: state.char_id,
+           action_id: action_id
+         }}
+      )
     end
+
     {:noreply, state}
   end
 
   defp handle_packet(%L2E.Packet.Client.ChangeMoveType2{move_type: move_type}, state) do
     new_state = %{state | is_running: move_type == 1}
+
     if state.region_pid do
       {x, y, z} = state.position
-      GenServer.cast(state.region_pid, {:broadcast_packet, %Server.ChangeMoveType{
-        object_id: state.char_id,
-        run_mode: move_type,
-        x: x, y: y, z: z
-      }})
+
+      GenServer.cast(
+        state.region_pid,
+        {:broadcast_packet,
+         %Server.ChangeMoveType{
+           object_id: state.char_id,
+           run_mode: move_type,
+           x: x,
+           y: y,
+           z: z
+         }}
+      )
     end
+
     {:noreply, new_state}
   end
 
   defp handle_packet(%L2E.Packet.Client.ChangeWaitType2{move_type: move_type}, state) do
     new_state = %{state | is_sitting: move_type == 1}
+
     if state.region_pid do
       {x, y, z} = state.position
-      GenServer.cast(state.region_pid, {:broadcast_packet, %Server.ChangeWaitType{
-        object_id: state.char_id,
-        move_type: move_type,
-        x: x, y: y, z: z
-      }})
+
+      GenServer.cast(
+        state.region_pid,
+        {:broadcast_packet,
+         %Server.ChangeWaitType{
+           object_id: state.char_id,
+           move_type: move_type,
+           x: x,
+           y: y,
+           z: z
+         }}
+      )
     end
+
     {:noreply, new_state}
   end
 
@@ -3263,17 +3331,23 @@ defmodule L2E.Session.PlayerSession do
 
   defp handle_packet(%L2E.Packet.Client.RequestUnequipItem{slot: slot}, state) do
     items = Inventory.get_items(state.char_id)
+
     case Enum.find(items, fn {inst, tmpl} -> inst.is_equipped and tmpl.bodypart == slot end) do
       {inst, _tmpl} ->
         case Inventory.use_item(state.char_id, inst.id) do
           {:ok, change_type, {instance, template}} ->
-            pkt = %Server.InventoryUpdate{changes: [{change_type_to_int(change_type), instance, template}]}
+            pkt = %Server.InventoryUpdate{
+              changes: [{change_type_to_int(change_type), instance, template}]
+            }
+
             send(state.conn_pid, {:send_packet, pkt})
             {:noreply, recalculate_stats_with_equipment(state)}
+
           {:error, _} ->
             send(state.conn_pid, {:send_packet, %Server.ActionFail{}})
             {:noreply, state}
         end
+
       nil ->
         {:noreply, state}
     end
@@ -3281,19 +3355,24 @@ defmodule L2E.Session.PlayerSession do
 
   defp handle_packet(%L2E.Packet.Client.RequestCrystallizeItem{object_id: oid}, state) do
     items = Inventory.get_items(state.char_id)
+
     case Enum.find(items, fn {inst, _} -> inst.id == oid end) do
       {_inst, template} when not is_nil(template) ->
-        {crystal_id, crystal_count} = crystal_data_for_grade(
-          Map.get(template, :grade, :none),
-          1
-        )
+        {crystal_id, crystal_count} =
+          crystal_data_for_grade(
+            Map.get(template, :grade, :none),
+            1
+          )
+
         Inventory.remove_item(state.char_id, oid, 1)
         Inventory.add_item(state.char_id, crystal_id, crystal_count)
         new_items = Inventory.get_items(state.char_id)
         send(state.conn_pid, {:send_packet, %Server.ItemList{items: new_items}})
+
       _ ->
         send(state.conn_pid, {:send_packet, %Server.ActionFail{}})
     end
+
     {:noreply, state}
   end
 
@@ -3388,18 +3467,23 @@ defmodule L2E.Session.PlayerSession do
           CharacterFriend.add(state.char_id, inviter_id, inviter_name)
           CharacterFriend.add(inviter_id, state.char_id, state.char_name)
 
-          send(state.conn_pid, {:send_packet, %Server.L2Friend{
-            type: 1,
-            obj_id: inviter_id,
-            name: inviter_name,
-            online: true
-          }})
+          send(
+            state.conn_pid,
+            {:send_packet,
+             %Server.L2Friend{
+               type: 1,
+               obj_id: inviter_id,
+               name: inviter_name,
+               online: true
+             }}
+          )
 
           case Registry.lookup(L2E.Session.Registry, inviter_id) do
             [{inviter_pid, _}] ->
               send(inviter_pid, {:friend_added, state.char_id, state.char_name})
 
-            [] -> :ok
+            [] ->
+              :ok
           end
         end
 
@@ -3418,18 +3502,25 @@ defmodule L2E.Session.PlayerSession do
         CharacterFriend.remove(state.char_id, friend.friend_id)
         CharacterFriend.remove(friend.friend_id, state.char_id)
 
-        send(state.conn_pid, {:send_packet, %Server.L2Friend{
-          type: 3,
-          obj_id: friend.friend_id,
-          name: friend.friend_name,
-          online: false
-        }})
+        send(
+          state.conn_pid,
+          {:send_packet,
+           %Server.L2Friend{
+             type: 3,
+             obj_id: friend.friend_id,
+             name: friend.friend_name,
+             online: false
+           }}
+        )
 
         {:noreply, state}
     end
   end
 
-  defp handle_packet(%Client.RequestSendFriendMsg{char_name: target_name, message: message}, state) do
+  defp handle_packet(
+         %Client.RequestSendFriendMsg{char_name: target_name, message: message},
+         state
+       ) do
     case Registry.lookup(L2E.Session.Registry, target_name) do
       [{target_pid, _}] ->
         send(target_pid, {:friend_msg, state.char_name, message})
@@ -3446,7 +3537,10 @@ defmodule L2E.Session.PlayerSession do
 
   # ---- M69: Duel --------------------------------------------------------------
 
-  defp handle_packet(%Client.RequestDuelStart{target_name: target_name, party_duel: party_duel}, state) do
+  defp handle_packet(
+         %Client.RequestDuelStart{target_name: target_name, party_duel: party_duel},
+         state
+       ) do
     if DuelManager.in_duel?(state.char_id) do
       {:noreply, state}
     else

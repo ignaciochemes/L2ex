@@ -2374,8 +2374,8 @@ defmodule L2E.Packet.Server.ChangeMoveType do
 
   @impl L2E.Packet.Encodable
   def encode(%__MODULE__{} = p) do
-    <<0x30::8, p.object_id::little-32, p.run_mode::little-32,
-      p.x::little-32-signed, p.y::little-32-signed, p.z::little-32-signed>>
+    <<0x30::8, p.object_id::little-32, p.run_mode::little-32, p.x::little-32-signed,
+      p.y::little-32-signed, p.z::little-32-signed>>
   end
 end
 
@@ -2397,8 +2397,8 @@ defmodule L2E.Packet.Server.ChangeWaitType do
 
   @impl L2E.Packet.Encodable
   def encode(%__MODULE__{} = p) do
-    <<0x31::8, p.object_id::little-32, p.move_type::little-32,
-      p.x::little-32-signed, p.y::little-32-signed, p.z::little-32-signed>>
+    <<0x31::8, p.object_id::little-32, p.move_type::little-32, p.x::little-32-signed,
+      p.y::little-32-signed, p.z::little-32-signed>>
   end
 end
 
@@ -2426,8 +2426,8 @@ defmodule L2E.Packet.Server.RelationChanged do
 
   @impl L2E.Packet.Encodable
   def encode(%__MODULE__{} = p) do
-    <<0x60::8, p.object_id::little-32, p.relation::little-32,
-      p.auto_attackable::8, p.rec_hp_percent::8>>
+    <<0x60::8, p.object_id::little-32, p.relation::little-32, p.auto_attackable::8,
+      p.rec_hp_percent::8>>
   end
 end
 
@@ -2458,8 +2458,8 @@ defmodule L2E.Packet.Server.MultiSellList do
     entry_count = length(p.entries)
     entries_bin = encode_entries(p.entries)
 
-    <<0xFE::8, 0x000B::little-16, p.list_id::little-32, 0::8,
-      entry_count::little-16, entries_bin::binary>>
+    <<0xFE::8, 0x000B::little-16, p.list_id::little-32, 0::8, entry_count::little-16,
+      entries_bin::binary>>
   end
 
   defp encode_entries(entries) do
@@ -2470,8 +2470,7 @@ defmodule L2E.Packet.Server.MultiSellList do
       ingredient_count = length(entry.ingredients)
 
       acc <>
-        <<entry.entry_id::little-32, 0::little-32,
-          product_count::little-16, products_bin::binary,
+        <<entry.entry_id::little-32, 0::little-32, product_count::little-16, products_bin::binary,
           ingredient_count::little-16, ingredients_bin::binary>>
     end)
   end
@@ -2696,73 +2695,32 @@ defmodule L2E.Packet.Server.PetInfo do
     fly_run = p.fly_run_spd || 0
     fly_walk = p.fly_walk_spd || 0
 
-    <<@opcode::8,
-      (p.summon_type || 0)::little-32,
-      (p.obj_id || 0)::little-32,
-      (p.npc_id || 0)::little-32,
-      0::little-32,
-      (p.x || 0)::little-32-signed,
-      (p.y || 0)::little-32-signed,
-      (p.z || 0)::little-32-signed,
-      (p.heading || 0)::little-32,
-      0::little-32,
-      (p.m_atk_spd || 0)::little-32,
-      (p.p_atk_spd || 0)::little-32,
-      (p.run_spd || 0)::little-32,
-      (p.walk_spd || 0)::little-32,
-      (p.swim_run_spd || 0)::little-32,
-      (p.swim_walk_spd || 0)::little-32,
-      fly_run::little-32,
-      fly_walk::little-32,
-      fly_run::little-32,
-      fly_walk::little-32,
-      (p.move_multiplier || 1.0)::little-float-64,
-      (p.atk_spd_multiplier || 1.0)::little-float-64,
-      (p.collision_radius || 0.0)::little-float-64,
-      (p.collision_height || 0.0)::little-float-64,
-      (p.weapon || 0)::little-32,
-      (p.armor || 0)::little-32,
-      0::little-32,
-      (p.has_owner || 0)::8,
-      (p.is_running || 0)::8,
-      (p.in_combat || 0)::8,
-      (p.is_dead || 0)::8,
-      (p.summoned_value || 1)::8>> <>
+    <<@opcode::8, p.summon_type || 0::little-32, p.obj_id || 0::little-32,
+      p.npc_id || 0::little-32, 0::little-32, p.x || 0::little-32-signed,
+      p.y || 0::little-32-signed, p.z || 0::little-32-signed, p.heading || 0::little-32,
+      0::little-32, p.m_atk_spd || 0::little-32, p.p_atk_spd || 0::little-32,
+      p.run_spd || 0::little-32, p.walk_spd || 0::little-32, p.swim_run_spd || 0::little-32,
+      p.swim_walk_spd || 0::little-32, fly_run::little-32, fly_walk::little-32,
+      fly_run::little-32, fly_walk::little-32, p.move_multiplier || 1.0::little-float-64,
+      p.atk_spd_multiplier || 1.0::little-float-64, p.collision_radius || 0.0::little-float-64,
+      p.collision_height || 0.0::little-float-64, p.weapon || 0::little-32,
+      p.armor || 0::little-32, 0::little-32, p.has_owner || 0::8, p.is_running || 0::8,
+      p.in_combat || 0::8, p.is_dead || 0::8,
+      p.summoned_value || 1::8>> <>
       name_bin <>
       title_bin <>
-      <<1::little-32,
-        (p.pvp_flag || 0)::little-32,
-        (p.karma || 0)::little-32,
-        (p.cur_fed || 0)::little-32,
-        (p.max_fed || 0)::little-32,
-        (p.cur_hp || 0)::little-32,
-        (p.max_hp || 0)::little-32,
-        (p.cur_mp || 0)::little-32,
-        (p.max_mp || 0)::little-32,
-        (p.sp || 0)::little-32,
-        (p.level || 1)::little-32,
-        (p.exp || 0)::little-64,
-        (p.exp_this_level || 0)::little-64,
-        (p.exp_next_level || 0)::little-64,
-        (p.weight || 0)::little-32,
-        (p.max_load || 0)::little-32,
-        (p.p_atk || 0)::little-32,
-        (p.p_def || 0)::little-32,
-        (p.m_atk || 0)::little-32,
-        (p.m_def || 0)::little-32,
-        (p.accuracy || 0)::little-32,
-        (p.evasion || 0)::little-32,
-        (p.critical || 0)::little-32,
-        (p.move_speed || 0)::little-32,
-        (p.p_atk_spd2 || 0)::little-32,
-        (p.m_atk_spd2 || 0)::little-32,
-        (p.abnormal_visual_effects || 0)::little-32,
-        (p.mountable || 0)::little-16,
-        (p.zone_type || 0)::8,
-        0::little-16,
-        (p.team || 0)::8,
-        (p.soul_shots_per_hit || 0)::little-32,
-        (p.spirit_shots_per_hit || 0)::little-32>>
+      <<1::little-32, p.pvp_flag || 0::little-32, p.karma || 0::little-32,
+        p.cur_fed || 0::little-32, p.max_fed || 0::little-32, p.cur_hp || 0::little-32,
+        p.max_hp || 0::little-32, p.cur_mp || 0::little-32, p.max_mp || 0::little-32,
+        p.sp || 0::little-32, p.level || 1::little-32, p.exp || 0::little-64,
+        p.exp_this_level || 0::little-64, p.exp_next_level || 0::little-64,
+        p.weight || 0::little-32, p.max_load || 0::little-32, p.p_atk || 0::little-32,
+        p.p_def || 0::little-32, p.m_atk || 0::little-32, p.m_def || 0::little-32,
+        p.accuracy || 0::little-32, p.evasion || 0::little-32, p.critical || 0::little-32,
+        p.move_speed || 0::little-32, p.p_atk_spd2 || 0::little-32, p.m_atk_spd2 || 0::little-32,
+        p.abnormal_visual_effects || 0::little-32, p.mountable || 0::little-16,
+        p.zone_type || 0::8, 0::little-16, p.team || 0::8, p.soul_shots_per_hit || 0::little-32,
+        p.spirit_shots_per_hit || 0::little-32>>
   end
 
   defp utf16le_string(str) do
@@ -2805,17 +2763,13 @@ defmodule L2E.Packet.Server.SiegeInfo do
     times = p.siege_times || []
     times_bin = Enum.reduce(times, <<>>, fn t, acc -> acc <> <<t::little-32>> end)
 
-    <<@opcode::8,
-      (p.residence_id || 0)::little-32,
-      (p.show_controls || 0)::little-32,
-      (p.owner_id || 0)::little-32>> <>
+    <<@opcode::8, p.residence_id || 0::little-32, p.show_controls || 0::little-32,
+      p.owner_id || 0::little-32>> <>
       clan_name_bin <>
       leader_name_bin <>
-      <<(p.ally_id || 0)::little-32>> <>
+      <<p.ally_id || 0::little-32>> <>
       ally_name_bin <>
-      <<(p.current_time || 0)::little-32,
-        (p.siege_time || 0)::little-32,
-        length(times)::little-32>> <>
+      <<p.current_time || 0::little-32, p.siege_time || 0::little-32, length(times)::little-32>> <>
       times_bin
   end
 
@@ -2897,6 +2851,6 @@ defmodule L2E.Packet.Server.ExOlympiadMode do
 
   @impl L2E.Packet.Encodable
   def encode(%__MODULE__{} = p) do
-    <<0xFE::8, 0x2B::little-16, (p.mode || 0)::8>>
+    <<0xFE::8, 0x2B::little-16, p.mode || 0::8>>
   end
 end

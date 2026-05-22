@@ -28,7 +28,8 @@ defmodule L2E.DB.CharacterFriend do
   @doc "Remove a friend entry."
   def remove(char_id, friend_id) do
     from(f in __MODULE__,
-      where: f.char_id == ^char_id and f.friend_id == ^friend_id)
+      where: f.char_id == ^char_id and f.friend_id == ^friend_id
+    )
     |> Repo.delete_all()
   end
 
@@ -41,7 +42,8 @@ defmodule L2E.DB.CharacterFriend do
   @doc "Check if two characters are friends."
   def friends?(char_id, other_id) do
     from(f in __MODULE__,
-      where: f.char_id == ^char_id and f.friend_id == ^other_id)
+      where: f.char_id == ^char_id and f.friend_id == ^other_id
+    )
     |> Repo.exists?()
   end
 end

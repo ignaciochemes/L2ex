@@ -1,9 +1,9 @@
 defmodule L2E.Duel.Manager do
   @moduledoc """
   ETS-backed registry of active duels.
-  
+
   Tracks: duel_id → duel_pid, attacker_id → duel_id, defender_id → duel_id
-  
+
   OTP design: GenServer with ETS for O(1) lookup. Each duel is a separate
   supervised process (L2E.Duel.Session) under L2E.Duel.Supervisor.
   """
@@ -77,8 +77,11 @@ defmodule L2E.Duel.Manager do
         :ets.delete(@table, {:duel, duel_id})
         # Remove player entries — iterate to find them
         :ets.match_delete(@table, {{:player, :_}, duel_id})
-      [] -> :ok
+
+      [] ->
+        :ok
     end
+
     {:noreply, state}
   end
 end

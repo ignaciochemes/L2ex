@@ -121,6 +121,13 @@ graph TB
         App --> InstMgr[Instance.Manager<br/>ETS registry]
         App --> LoginSup[LoginServer.Supervisor]
         App --> NetSup[Network.Supervisor]
+        App --> SubData[Data.SubclassData<br/>ETS]
+        App --> DuelReg[Duel.Registry<br/>:unique]
+        App --> DuelMgr[Duel.Manager<br/>ETS]
+        App --> DuelSup[Duel.Supervisor<br/>DynamicSupervisor]
+        App --> OlySup[Olympiad.Supervisor]
+        App --> PetSup[Pet.Supervisor<br/>DynamicSupervisor]
+        App --> SiegeSup[Siege.Supervisor]
     end
 ```
 
@@ -427,16 +434,24 @@ L2E:      1.0   2.0   3.9   7.8   15.4  (near-linear)
 | M56 – Henna / Recipe / Augmentation handlers | `RequestHennaEquip` (0xBC) consumes `dye_count` dye items from inventory, fills slot 1–3, persists `henna1/2/3` to DB; `RequestHennaRemove` (0xBF) returns `cancel_fee` dye items, clears slot; `RequestRecipeItemMakeSelf` (0xAF) validates all ingredients in inventory, deducts them, credits result item; `RequestConfirmRefinerItem` (0xD0/0x2A) + `RequestRefine` (0xD0/0x2C) rolls random `OptionTable` augmentation option and sends result; server packets: `RecipeItemMakeInfo` (0xD7), `HennaInfo` (0xE4), `ExVariationResult` (0xFE/0x55); `hennas` field in `PlayerSession` state loaded from DB on char select |
 | M57 – XP / Stats data | `L2E.Data.ExperienceTable` pure module (levels 1–85, cumulative XP thresholds); non-linear HP/MP polynomial growth in `Stats.compute/2` (`max_hp = base × (1 + lvl×0.07 + lvl^1.5×0.01)`); `xp_to_next_level/1` delegates to `ExperienceTable` delta |
 | M59 – AutoAttack / MoveToPawn / ActionUse packets | `AutoAttackStart` (0x2B) / `AutoAttackStop` (0x2C) server packets sent on attack start/stop; `MoveToPawn` (0x60) for NPC chase movement; `RequestActionUse` (0x45) client packet: action 0 → auto-attack toggle (peace-zone gated), action 2 → sit/stand no-op stub |
+| M66 – Friend system | `character_friends` DB table + `CharacterFriend` Ecto schema; 12 client packets (invite / answer / list / delete / send message); 4 server packets (`FriendList` 0xFA, `L2Friend` 0xFB, `FriendStatusPacket` 0xFC, `FriendRecvMsg` 0xFD); session handlers + `handle_info` callbacks for cross-process friend events |
+| M68 – Sub-class foundation | `character_subclasses` DB migration + `CharacterSubclass` Ecto schema (class_id, class_index, level, exp, sp per sub-class); `L2E.Data.SubclassData` ETS GenServer with `available_for/1` and `valid_subclass?/2` |
+| M69 – Duel system | `L2E.Duel.Manager` ETS registry (`in_duel?/1`, `register/4`, `new_duel_id/0`); `L2E.Duel.Session` GenServer per duel (phases `:pending → :countdown → :active → :ended`, event-driven via `Process.send_after`); `L2E.Duel.Supervisor` DynamicSupervisor; 4 client packets + 4 server packets (`ExDuelAskStart / Ready / Start / End`); session handlers + duel event `handle_info` callbacks |
+| M70 – Olympiad foundation | `L2E.Olympiad.Manager` ETS GenServer (`register/3`, `unregister/1`, `get_points/1`, `add_points/2`, `active?/0`, `registration_list/0`); period timer via `Process.send_after`; `L2E.Olympiad.Supervisor`; `RequestOlympiadMatchList` client packet + `ExOlympiadMode` server packet |
+| M71 – Siege foundation | `L2E.Siege.Castle` struct with 9 Interlude castles; `L2E.Siege.Manager` ETS GenServer (`get_castle/1`, `register_attacker/3`, `register_defender/3`, `siege_active?/1`); `L2E.Siege.Supervisor`; `RequestSiegeInfo` (0x47) client packet + `SiegeInfo` (0xC9) server packet |
+| M72 – Pet system foundation | `L2E.Pet.Session` GenServer per pet (hunger timer, HP regen, follow AI via `handle_cast({:owner_moved, pos})`); `L2E.Pet.Supervisor` DynamicSupervisor; `RequestPetUseItem` (0x8A) + `RequestPetGetItem` (0x8F) client packets; `PetInfo` (0xB1) server packet; pet hunger/event `handle_info` callbacks in `PlayerSession` |
 
 ### Next
 
 | Milestone | Description |
 |-----------|-------------|
 | M55 – Real Geodata | Parse `.l2j` binary geodata files into ETS; NSWE passability bitmask checks; height map lookup; replace permissive stubs in `L2E.Geodata` with actual LOS and movement validation |
-| M58 – Siege system | Castle siege zone lifecycle, siege flag placement, attacker/defender clan logic, siege scheduler, `SiegeSupervisor` isolated subtree |
-| M60 – Olympiad | Match registration, 1v1 arena instance, score tracking, `OlympiadManager` GenServer |
 | M61 – Grand Bosses | Boss spawn tables, respawn window tracking, epic jewelry drops, world-announce on death |
-| M62 – Pets & Summons | Pet `GenServer` linked to owner session; summon skill → spawn pet NPC; feed / unsummon; pet stats from `PetDataTable` |
+| M68-B – Sub-class switching | `RequestSubclassInfo` / `RequestExSubclassInfoPacket`; `RequestSubclassChange` with level/exp swap; sub-class skill trees; DB persistence on switch |
+| M69-B – Duel full | Duel zone boundary enforcement; party duel support; winner determination on HP/surrender; PvP stat update |
+| M70-B – Olympiad matches | 1v1 arena instance lifecycle; match scheduler; score/points persistence to DB; `OlympiadInfo` / `OlympiadMatchList` server packets |
+| M71-B – Siege full | Siege scheduler with registration window; castle ownership transfer; siege zone enforcement; `SiegeClans` packet; attacker/defender NPC spawns |
+| M72-B – Pets full | `PetDataTable` ETS from XML; pet inventory; feed system; unsummon on owner death / logout; summoned pet NPC visible to region |
 
 ---
 

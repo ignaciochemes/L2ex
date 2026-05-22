@@ -3,13 +3,13 @@ defmodule L2E.Olympiad.Manager do
   Olympiad Manager — ETS-backed registration and point tracking.
 
   Behavioral reference: OlympiadManager.java
-  
+
   OTP design: GenServer with ETS for registrations. Scheduled periods
   via Process.send_after (no polling). Each match spawns a supervised process.
-  
+
   Foundation scope (M70):
   - Registration list
-  - Point tracking  
+  - Point tracking
   - Match list query
   - Period state (STARTED / ENDED)
   """
@@ -76,7 +76,13 @@ defmodule L2E.Olympiad.Manager do
     if Map.has_key?(state.registrations, char_id) do
       {:reply, {:error, :already_registered}, state}
     else
-      entry = %{char_id: char_id, char_name: char_name, class_id: class_id, registered_at: System.monotonic_time()}
+      entry = %{
+        char_id: char_id,
+        char_name: char_name,
+        class_id: class_id,
+        registered_at: System.monotonic_time()
+      }
+
       {:reply, :ok, %{state | registrations: Map.put(state.registrations, char_id, entry)}}
     end
   end

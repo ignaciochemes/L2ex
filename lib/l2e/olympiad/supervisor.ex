@@ -9,6 +9,7 @@ defmodule L2E.Olympiad.Supervisor do
     children = [
       L2E.Olympiad.Manager
     ]
+
     Supervisor.init(children, strategy: :one_for_one)
   end
 end

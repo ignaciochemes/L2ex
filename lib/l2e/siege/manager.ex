@@ -85,7 +85,9 @@ defmodule L2E.Siege.Manager do
       :ets.insert(@table, {{:defenders, id}, []})
     end)
 
-    Logger.info("[Siege] SiegeManager initialized with #{length(L2E.Siege.Castle.all_castles())} castles.")
+    Logger.info(
+      "[Siege] SiegeManager initialized with #{length(L2E.Siege.Castle.all_castles())} castles."
+    )
 
     {:ok, %{}}
   end
@@ -93,6 +95,7 @@ defmodule L2E.Siege.Manager do
   @impl GenServer
   def handle_call({:register_attacker, castle_id, clan_id, clan_name}, _from, state) do
     current = get_attackers(castle_id)
+
     if Enum.any?(current, &(&1.clan_id == clan_id)) do
       {:reply, {:error, :already_registered}, state}
     else
@@ -104,6 +107,7 @@ defmodule L2E.Siege.Manager do
 
   def handle_call({:register_defender, castle_id, clan_id, clan_name}, _from, state) do
     current = get_defenders(castle_id)
+
     if Enum.any?(current, &(&1.clan_id == clan_id)) do
       {:reply, {:error, :already_registered}, state}
     else

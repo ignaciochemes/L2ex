@@ -5,7 +5,7 @@ defmodule L2E.Data.SubclassData do
   Each character class has a set of available sub-classes it can take.
   Sub-classes must be from a different race's 3rd class lineage.
   In Interlude, players can take sub-classes of any class except their own lineage.
-  
+
   For simplicity: any 3rd-tier class ID (76-88, Kamael excluded) is valid as a sub-class,
   excluding the player's own class lineage.
   """
@@ -16,21 +16,53 @@ defmodule L2E.Data.SubclassData do
 
   # 3rd-class IDs available as sub-classes (Interlude)
   @subclass_ids [
-    88,  # Hellbound Archmage
-    87,  # Archmage
-    86,  # Soultaker
-    85,  # Mystic Muse
-    84,  # Storm Screamer
-    83,  # Arcana Lord
-    82,  # Doomcryer
-    81,  # Dominator
-    80,  # Titan
-    79,  # Grand Khavatari
-    78,  # Dreadnought
-    77,  # Maestro
-    76,  # Fortune Seeker
+    # Hellbound Archmage
+    88,
+    # Archmage
+    87,
+    # Soultaker
+    86,
+    # Mystic Muse
+    85,
+    # Storm Screamer
+    84,
+    # Arcana Lord
+    83,
+    # Doomcryer
+    82,
+    # Dominator
+    81,
+    # Titan
+    80,
+    # Grand Khavatari
+    79,
+    # Dreadnought
+    78,
+    # Maestro
+    77,
+    # Fortune Seeker
+    76,
     # 2nd class - also valid for sub-class (levels 40+)
-    56, 57, 58, 59, 60, 61, 62, 63, 64, 65, 66, 67, 68, 69, 70, 71, 72, 73, 74, 75
+    56,
+    57,
+    58,
+    59,
+    60,
+    61,
+    62,
+    63,
+    64,
+    65,
+    66,
+    67,
+    68,
+    69,
+    70,
+    71,
+    72,
+    73,
+    74,
+    75
   ]
 
   def start_link(_opts), do: GenServer.start_link(__MODULE__, [], name: __MODULE__)

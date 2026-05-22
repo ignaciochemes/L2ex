@@ -35,11 +35,16 @@ defmodule L2E.Data.ArmorSetData do
   @spec check_set_bonus(map()) :: map()
   def check_set_bonus(equipped_slots) do
     # equipped_slots: %{slot_id => item_id}
-    chest_id = Map.get(equipped_slots, 10)  # slot 10 = chest
+    # slot 10 = chest
+    chest_id = Map.get(equipped_slots, 10)
+
     case get(chest_id) do
-      nil -> %{}
+      nil ->
+        %{}
+
       set ->
         required = set.required_items
+
         if Enum.all?(required, fn {slot, item_id} -> Map.get(equipped_slots, slot) == item_id end) do
           set.bonus
         else

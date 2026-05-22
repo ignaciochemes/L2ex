@@ -9,6 +9,7 @@ defmodule L2E.Siege.Supervisor do
     children = [
       L2E.Siege.Manager
     ]
+
     Supervisor.init(children, strategy: :one_for_one)
   end
 end

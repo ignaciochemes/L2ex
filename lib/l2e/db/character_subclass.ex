@@ -5,12 +5,12 @@ defmodule L2E.DB.CharacterSubclass do
   alias L2E.Repo
 
   schema "character_subclasses" do
-    field :char_id, :integer
-    field :class_id, :integer
-    field :class_index, :integer
-    field :level, :integer, default: 40
-    field :exp, :integer, default: 0
-    field :sp, :integer, default: 0
+    field(:char_id, :integer)
+    field(:class_id, :integer)
+    field(:class_index, :integer)
+    field(:level, :integer, default: 40)
+    field(:exp, :integer, default: 0)
+    field(:sp, :integer, default: 0)
 
     timestamps()
   end
@@ -18,9 +18,10 @@ defmodule L2E.DB.CharacterSubclass do
   @doc "Load all sub-classes for a character, ordered by class_index."
   def load_for_character(char_id) do
     Repo.all(
-      from s in __MODULE__,
+      from(s in __MODULE__,
         where: s.char_id == ^char_id,
         order_by: [asc: s.class_index]
+      )
     )
   end
 
@@ -42,6 +43,7 @@ defmodule L2E.DB.CharacterSubclass do
     case Repo.get_by(__MODULE__, char_id: char_id, class_index: class_index) do
       nil ->
         {:error, :not_found}
+
       subclass ->
         subclass
         |> Ecto.Changeset.change(level: level, exp: exp, sp: sp)
