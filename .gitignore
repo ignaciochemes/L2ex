@@ -40,6 +40,11 @@ config/test.secret.exs
 /L2J_Mobius_CT_0_Interlude/
 
 # -----------------------------------------------------------------------
+# Squad AI team state (local only — not tracked in remote)
+# -----------------------------------------------------------------------
+.squad/
+
+# -----------------------------------------------------------------------
 # OS artifacts
 # -----------------------------------------------------------------------
 .DS_Store
@@ -69,7 +74,7 @@ desktop.ini
 .squad/.scratch/
 # Squad: SubSquad activation file (local to this machine)
 .squad-workstream
-.squad
+.squad/
 .copilot
 .github/agents
 .github/workflows
