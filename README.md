@@ -99,6 +99,10 @@ graph TB
         App --> NpcTpl[NPC.TemplateTable<br/>ETS]
         App --> ItemTpl[Item.TemplateTable<br/>ETS]
         App --> SkillTpl[Skill.TemplateTable<br/>ETS]
+        App --> BuyList[Data.BuyListTable<br/>ETS]
+        App --> TpTbl[Data.TeleporterTable<br/>ETS]
+        App --> EnchTbl[Data.EnchantData<br/>ETS]
+        App --> ZoneTbl[Zone.ZoneTable<br/>ETS]
         App --> SessionReg[Session.Registry<br/>:unique]
         App --> SessionSup[Session.Supervisor<br/>DynamicSupervisor]
         App --> WorldSup[World.Supervisor]
@@ -107,6 +111,8 @@ graph TB
         App --> SpawnTbl[NPC.SpawnTable]
         App --> PartySup[Party.Supervisor<br/>DynamicSupervisor]
         App --> ClanSup[Clan.Supervisor<br/>DynamicSupervisor]
+        App --> WrhSup[Warehouse.Supervisor]
+        App --> TradeSup[Trade.Supervisor]
         App --> LoginSup[LoginServer.Supervisor]
         App --> NetSup[Network.Supervisor]
     end
@@ -380,15 +386,24 @@ L2E:      1.0   2.0   3.9   7.8   15.4  (near-linear)
 | M20 – Geodata stubs | `L2E.Geodata` module with permissive `can_see?/2`, `can_move?/3`, `get_height/3` |
 | M21 – Parties | `Party` GenServer + `Party.Supervisor`; invite/accept/leave/kick; vitals broadcast to party window |
 | M22 – Clans | `Clan` GenServer + `Clan.Supervisor`; invite/accept/leave/kick; member list broadcast |
+| M23 – Combat formulas | Proper L2 Interlude P.Atk / P.Def / crit formulas; stat bonuses from equipment wired into `Combat.Resolver` |
+| M24 – BuyList from XML | `Data.BuyListTable` ETS GenServer loading merchant item lists from `L2J_Mobius_CT_0_Interlude` XML; shops functional |
+| M25 – Teleport NPCs | `Data.TeleporterTable` ETS GenServer; teleporter NPC dialog with fee deduction via `Inventory.spend_adena/2` |
+| M26 – Warehouse system | Per-character private warehouse as a supervised `GenServer`; `WarehouseItem` Ecto schema; deposit / withdraw with DB persistence |
+| M27 – Player-to-player trade | Ephemeral `Trade` GenServer per session; add/remove items, confirm, cancel; 60 s auto-cancel timer; atomic item transfer via `Inventory` |
+| M28 – Enchant system | `Data.EnchantData` ETS from `EnchantItemData.xml`; `try_enchant/2` with Interlude rates; blessed scroll (item kept on fail) vs normal scroll (item destroyed); `RequestEnchantItem` + `EnchantResult` packets |
+| M29 – Zone system | `Zone.ZoneTable` ETS loading all `data/zones/*.xml`; NPoly point-in-polygon geometry; `zone_type_at/3` with priority `:peace > :no_pvp > :siege > :pvp`; attacks and skills blocked in peace zones |
 
 ### Next
 
 | Milestone | Description |
 |-----------|-------------|
-| M23 – NPC shop data | Load merchant item lists from `L2J_Mobius_CT_0_Interlude/data/merchants/` XML |
-| M24 – Geodata heightmap | Replace stubs with real `.l2j` geodata files for movement validation |
-| M25 – Quests | Quest state machine, quest items, NPC quest flags |
-| M26 – Olympiad / PvP zones | Zone types, peace zones, PvP flag system |
+| M30 – PvP flag system | PvP / PK flag state, karma accumulation, flag timer, `UserInfo` updates on flag change |
+| M31 – NPC AI improvements | Aggro range detection on player enter, leash radius, return-to-spawn path, random walk in idle |
+| M32 – Quest system | Quest state machine, quest items, NPC quest flags, reward delivery |
+| M33 – Geodata heightmap | Replace stubs with real `.l2j` geodata for LOS and movement validation |
+| M34 – Olympiad | Match registration, 1v1 arena instance, score tracking |
+| M35 – Siege | Castle siege zone lifecycle, siege flag placement, attacker/defender logic |
 
 ---
 
