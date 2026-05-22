@@ -37,6 +37,10 @@ defmodule L2E.Session.PlayerSession do
   alias L2E.Trade
   alias L2E.Data.EnchantData
   alias L2E.Zone.ZoneTable
+  alias L2E.Data.SkillLearnTable
+  alias L2E.Data.ClassAdvancementTable
+  alias L2E.DB.CharacterSkill
+  alias L2E.DB.CharacterQuest
 
   # Respawn delay after death (ms)
   @respawn_ms 30_000
@@ -71,6 +75,9 @@ defmodule L2E.Session.PlayerSession do
   def send_packet(session_pid, packet) do
     GenServer.cast(session_pid, {:send_packet, packet})
   end
+
+  @doc "Get the current quest state for quest_id. Returns a map with :state, :cond, :count, :reward_taken."
+  def get_quest_state(pid, quest_id), do: GenServer.call(pid, {:get_quest_state, quest_id})
 
   # -----------------------------------------------------------------------
   # GenServer callbacks
@@ -108,8 +115,8 @@ defmodule L2E.Session.PlayerSession do
       attack_timer: nil,
       dead: false,
       # Skill state
-      # [{skill_id, level}]
-      skills: [],
+      # %{skill_id => level}
+      skills: %{},
       # [BuffInfo.t()]
       buffs: [],
       # %{skill_id => expires_monotonic_ms}
@@ -147,12 +154,16 @@ defmodule L2E.Session.PlayerSession do
       private_store_type: :none,
       private_store_list: [],
       private_store_title: "",
+      # M43: Buy store
+      buy_store_list: [],
       # M42: GM access level (0 = normal player, >0 = GM)
       access_level: 0,
       # M42: GM invisibility toggle
       invisible: false,
       # M36: Tracks which warehouse context the player has open (:personal | :clan)
-      warehouse_context: :personal
+      warehouse_context: :personal,
+      # M47: Quest state map — %{quest_id => %{state: 0|1|2, cond: int, count: int, reward_taken: bool}}
+      quests: %{}
     }
 
     {:ok, state}
@@ -405,6 +416,68 @@ defmodule L2E.Session.PlayerSession do
       end
 
     {:noreply, new_state}
+  end
+
+  # M43: Buy store owner's session notifies seller about a completed purchase.
+  # Seller loses items, gains adena, receives inventory update packets.
+  def handle_cast({:buy_store_sold, validated_items, total_adena}, state) do
+    # Add adena to seller
+    case Inventory.add_item(state.char_id, 57, total_adena) do
+      {:ok, change_type, {instance, template}} ->
+        pkt = %Server.InventoryUpdate{
+          changes: [{change_type_to_int(change_type), instance, template}]
+        }
+
+        send(state.conn_pid, {:send_packet, pkt})
+
+      _ ->
+        :ok
+    end
+
+    # Remove each sold item and send inventory update
+    Enum.each(validated_items, fn %{object_id: obj_id, count: count} ->
+      case Inventory.remove_item(state.char_id, obj_id, count) do
+        {:ok, change_type, {instance, template}} ->
+          pkt = %Server.InventoryUpdate{
+            changes: [{change_type_to_int(change_type), instance, template}]
+          }
+
+          send(state.conn_pid, {:send_packet, pkt})
+
+        _ ->
+          :ok
+      end
+    end)
+
+    {:noreply, state}
+  end
+
+  # M47: External systems (NPC kill events, item handlers) push quest progress updates
+  def handle_cast({:quest_progress, quest_id, cond, count}, state) do
+    updated =
+      Map.update(
+        state.quests,
+        quest_id,
+        %{state: 1, cond: cond, count: count, reward_taken: false},
+        fn q -> %{q | cond: cond, count: count} end
+      )
+
+    L2E.DB.CharacterQuest.set_quest_state(state.char_id, quest_id, 1, cond, count)
+    {:noreply, %{state | quests: updated}}
+  end
+
+  # M47: Mark a quest as completed
+  def handle_cast({:quest_complete, quest_id}, state) do
+    updated =
+      Map.update(
+        state.quests,
+        quest_id,
+        %{state: 2, cond: 0, count: 0, reward_taken: false},
+        fn q -> %{q | state: 2} end
+      )
+
+    L2E.DB.CharacterQuest.complete_quest(state.char_id, quest_id)
+    {:noreply, %{state | quests: updated}}
   end
 
   # -----------------------------------------------------------------------
@@ -758,6 +831,21 @@ defmodule L2E.Session.PlayerSession do
     {:noreply, %{state | party_pid: nil}}
   end
 
+  # Instance expired — eject player back to Giran town spawn
+  def handle_info(:instance_ejected, state) do
+    spawn_x = Application.get_env(:l2e, :spawn_x, 83_400)
+    spawn_y = Application.get_env(:l2e, :spawn_y, 147_880)
+    spawn_z = Application.get_env(:l2e, :spawn_z, -3_400)
+    new_state = do_teleport({spawn_x, spawn_y, spawn_z}, state)
+    {:noreply, new_state}
+  end
+
+  # Door state changed in the current instance
+  def handle_info({:instance_door_update, door_id, open?}, state) do
+    Logger.debug("[Instance] Door #{door_id} is now #{if open?, do: "open", else: "closed"}")
+    {:noreply, state}
+  end
+
   def handle_info(msg, state) do
     Logger.debug("[PlayerSession] Unexpected message: #{inspect(msg)}")
     {:noreply, state}
@@ -788,6 +876,73 @@ defmodule L2E.Session.PlayerSession do
   # M35: Buyer calls this to read the seller's current store list + char_id
   def handle_call(:get_store_list, _from, state) do
     {:reply, {state.char_id, state.private_store_list}, state}
+  end
+
+  # M43: Anyone can call this to read the buy store list + owner char_id
+  def handle_call(:get_buy_store_list, _from, state) do
+    {:reply, {state.char_id, state.buy_store_list}, state}
+  end
+
+  # M47: Retrieve current quest state for a quest_id
+  def handle_call({:get_quest_state, quest_id}, _from, state) do
+    quest = Map.get(state.quests, quest_id, %{state: 0, cond: 0, count: 0, reward_taken: false})
+    {:reply, quest, state}
+  end
+
+  # M43: Runs on the BUY STORE OWNER's session when a seller offers items.
+  # Validates the request, transfers items + adena, and updates the buy list.
+  def handle_call(
+        {:buy_from_me, seller_pid, seller_char_id, items},
+        _from,
+        %{private_store_type: :buy_store} = state
+      ) do
+    case validate_buy_from_request(state.buy_store_list, items) do
+      {:ok, total_cost, validated} ->
+        if Inventory.get_adena_count(state.char_id) >= total_cost do
+          # Deduct adena from owner
+          Inventory.spend_adena(state.char_id, total_cost)
+
+          # Give items to owner, send inventory updates
+          Enum.each(validated, fn %{item_id: item_id, count: count} ->
+            case Inventory.add_item(state.char_id, item_id, count) do
+              {:ok, change_type, {instance, template}} ->
+                pkt = %Server.InventoryUpdate{
+                  changes: [{change_type_to_int(change_type), instance, template}]
+                }
+
+                send(state.conn_pid, {:send_packet, pkt})
+
+              _ ->
+                :ok
+            end
+          end)
+
+          # Notify seller to remove items from their inventory and receive adena
+          GenServer.cast(seller_pid, {:buy_store_sold, validated, total_cost})
+
+          # Reduce buy list counts; close store if all filled
+          new_buy_list = reduce_buy_list(state.buy_store_list, validated)
+
+          new_state =
+            if new_buy_list == [] do
+              %{state | buy_store_list: [], private_store_type: :none}
+            else
+              %{state | buy_store_list: new_buy_list}
+            end
+
+          _ = seller_char_id
+          {:reply, :ok, new_state}
+        else
+          {:reply, {:error, :insufficient_adena}, state}
+        end
+
+      {:error, reason} ->
+        {:reply, {:error, reason}, state}
+    end
+  end
+
+  def handle_call({:buy_from_me, _seller_pid, _seller_char_id, _items}, _from, state) do
+    {:reply, {:error, :store_closed}, state}
   end
 
   # -----------------------------------------------------------------------
@@ -1023,6 +1178,9 @@ defmodule L2E.Session.PlayerSession do
     skills = load_char_skills(char_id)
     send(state.conn_pid, {:send_packet, build_skill_list_packet(skills)})
 
+    # Load quest state from DB
+    quests = load_char_quests(char_id)
+
     region_pid = enter_region(new_state)
 
     regen_timer = Process.send_after(self(), :regen_tick, 3_000)
@@ -1037,6 +1195,7 @@ defmodule L2E.Session.PlayerSession do
        new_state
        | region_pid: region_pid,
          skills: skills,
+         quests: quests,
          regen_timer: regen_timer,
          save_timer: save_timer
      }}
@@ -1101,15 +1260,15 @@ defmodule L2E.Session.PlayerSession do
           nil ->
             # M35: If target is a player with an active sell store, show it
             case Registry.lookup(L2E.Session.Registry, obj_id) do
-              [{seller_pid, _}] ->
-                {_seller_char_id, store_list} = GenServer.call(seller_pid, :get_store_list)
+              [{other_pid, _}] ->
+                {_char_id, sell_list} = GenServer.call(other_pid, :get_store_list)
 
-                unless store_list == [] do
+                unless sell_list == [] do
                   buyer_adena = Inventory.get_adena_count(state.char_id)
                   seller_items = Inventory.get_items(obj_id)
 
                   store_display =
-                    Enum.flat_map(store_list, fn entry ->
+                    Enum.flat_map(sell_list, fn entry ->
                       case Enum.find(seller_items, fn {inst, _} -> inst.id == entry.object_id end) do
                         nil ->
                           []
@@ -1138,6 +1297,21 @@ defmodule L2E.Session.PlayerSession do
                   }
 
                   send(state.conn_pid, {:send_packet, store_pkt})
+                end
+
+                # M43: Also display buy store if owner has one open
+                {_char_id, buy_list} = GenServer.call(other_pid, :get_buy_store_list)
+
+                unless buy_list == [] do
+                  buy_pkt = %Server.PrivateStoreListBuy{
+                    owner_id: obj_id,
+                    items:
+                      Enum.map(buy_list, fn e ->
+                        %{item_id: e.item_id, count: e.count, price: e.price}
+                      end)
+                  }
+
+                  send(state.conn_pid, {:send_packet, buy_pkt})
                 end
 
               _ ->
@@ -1457,6 +1631,50 @@ defmodule L2E.Session.PlayerSession do
   end
 
   defp handle_packet(%L2E.Packet.Client.RequestBypassToServer{}, state), do: {:noreply, state}
+
+  # ---- RequestGotoLobby (0xBA) — player returns to character selection ----
+
+  defp handle_packet(%L2E.Packet.Client.RequestGotoLobby{}, %{auth_state: :in_world} = state) do
+    # Save position/vitals to DB before leaving world
+    persist_position(state)
+
+    # Cancel active timers
+    cancel_timer(state.regen_timer)
+    cancel_timer(state.save_timer)
+    cancel_timer(state.attack_timer)
+    cancel_timer(state.cast_timer)
+
+    # Leave current region and unregister from session registry
+    leave_region(state)
+    stop_inventory(state)
+
+    if state.char_id do
+      Registry.unregister(L2E.Session.Registry, state.char_id)
+    end
+
+    # RestartResponse: opcode 0x71 + success byte
+    send(state.conn_pid, {:send_packet, <<0x71, 0x01>>})
+
+    {:noreply,
+     %{
+       state
+       | auth_state: :authenticated,
+         region_pid: nil,
+         target_id: nil,
+         attacking: false,
+         attack_timer: nil,
+         dead: false,
+         casting: false,
+         cast_timer: nil,
+         regen_timer: nil,
+         save_timer: nil,
+         buffs: [],
+         cooldowns: %{},
+         pvp_flag_timer: nil
+     }}
+  end
+
+  defp handle_packet(%L2E.Packet.Client.RequestGotoLobby{}, state), do: {:noreply, state}
 
   defp handle_packet(
          %L2E.Packet.Client.RequestBuyItem{npc_object_id: _npc_id, items: items},
@@ -2116,6 +2334,183 @@ defmodule L2E.Session.PlayerSession do
 
   defp handle_packet(%L2E.Packet.Client.RequestPrivateStoreBuy{}, state), do: {:noreply, state}
 
+  # ---- M43: Private Store — Buy ------------------------------------------
+
+  defp handle_packet(
+         %L2E.Packet.Client.RequestPrivateStoreManageBuy{},
+         %{auth_state: :in_world} = state
+       ) do
+    pkt = %Server.PrivateStoreManageListBuy{
+      owner_id: state.char_id,
+      adena: Inventory.get_adena_count(state.char_id),
+      buy_list: state.buy_store_list
+    }
+
+    send(state.conn_pid, {:send_packet, pkt})
+    {:noreply, state}
+  end
+
+  defp handle_packet(%L2E.Packet.Client.RequestPrivateStoreManageBuy{}, state),
+    do: {:noreply, state}
+
+  defp handle_packet(
+         %L2E.Packet.Client.SetPrivateStoreListBuy{items: items},
+         %{auth_state: :in_world} = state
+       ) do
+    valid =
+      is_list(items) and
+        Enum.all?(items, fn e ->
+          is_map(e) and
+            Map.get(e, :item_id, 0) > 0 and
+            Map.get(e, :count, 0) > 0 and
+            Map.get(e, :price, 0) > 0
+        end)
+
+    if valid do
+      total_needed = Enum.reduce(items, 0, fn e, acc -> acc + e.price * e.count end)
+      owner_adena = Inventory.get_adena_count(state.char_id)
+
+      if owner_adena >= total_needed do
+        new_state = %{state | private_store_type: :buy_store, buy_store_list: items}
+
+        msg_pkt = %Server.PrivateStoreMsgBuy{
+          object_id: state.char_id,
+          title: state.private_store_title
+        }
+
+        if state.region_pid do
+          GenServer.cast(state.region_pid, {:broadcast_packet, msg_pkt})
+        end
+
+        {:noreply, new_state}
+      else
+        {:noreply, state}
+      end
+    else
+      {:noreply, state}
+    end
+  end
+
+  defp handle_packet(%L2E.Packet.Client.SetPrivateStoreListBuy{}, state), do: {:noreply, state}
+
+  defp handle_packet(
+         %L2E.Packet.Client.RequestPrivateStoreQuitBuy{},
+         %{auth_state: :in_world} = state
+       ) do
+    new_state = %{state | private_store_type: :none, buy_store_list: []}
+
+    msg_pkt = %Server.PrivateStoreMsgBuy{object_id: state.char_id, title: ""}
+
+    if state.region_pid do
+      GenServer.cast(state.region_pid, {:broadcast_packet, msg_pkt})
+    end
+
+    {:noreply, new_state}
+  end
+
+  defp handle_packet(%L2E.Packet.Client.RequestPrivateStoreQuitBuy{}, state),
+    do: {:noreply, state}
+
+  # Seller sends this when they want to sell items TO a buy store owner.
+  # (L2J: RequestPrivateStoreSell — client opcode 0xB7)
+  defp handle_packet(
+         %L2E.Packet.Client.RequestPrivateStoreSell{owner_obj_id: owner_id, items: items},
+         %{auth_state: :in_world} = state
+       ) do
+    with [{owner_pid, _}] <- Registry.lookup(L2E.Session.Registry, owner_id),
+         true <- validate_seller_has_items(state.char_id, items) do
+      GenServer.call(owner_pid, {:buy_from_me, self(), state.char_id, items})
+    else
+      _ -> :ok
+    end
+
+    {:noreply, state}
+  end
+
+  defp handle_packet(%L2E.Packet.Client.RequestPrivateStoreSell{}, state), do: {:noreply, state}
+
+  # ---- M44: Skill Learn --------------------------------------------------
+
+  defp handle_packet(
+         %L2E.Packet.Client.RequestAcquireSkillInfo{
+           skill_id: sid,
+           skill_level: slvl,
+           acquire_type: _
+         },
+         %{auth_state: :in_world} = state
+       ) do
+    info = SkillLearnTable.get_skill_info(state.class_id, sid, slvl)
+
+    pkt = %Server.AcquireSkillInfo{
+      skill_id: sid,
+      skill_level: slvl,
+      sp_cost: if(info, do: info.sp_cost, else: 0),
+      min_level: if(info, do: info.min_level, else: 0)
+    }
+
+    send(state.conn_pid, {:send_packet, pkt})
+    {:noreply, state}
+  end
+
+  defp handle_packet(%L2E.Packet.Client.RequestAcquireSkillInfo{}, state), do: {:noreply, state}
+
+  defp handle_packet(
+         %L2E.Packet.Client.RequestAcquireSkill{
+           skill_id: sid,
+           skill_level: slvl,
+           acquire_type: _
+         },
+         %{auth_state: :in_world} = state
+       ) do
+    case SkillLearnTable.get_skill_info(state.class_id, sid, slvl) do
+      nil ->
+        {:noreply, state}
+
+      %{sp_cost: sp_cost, min_level: min_level} ->
+        cond do
+          state.level < min_level ->
+            {:noreply, state}
+
+          state.sp < sp_cost ->
+            {:noreply, state}
+
+          true ->
+            new_sp = state.sp - sp_cost
+            new_skills = Map.put(state.skills, sid, slvl)
+
+            # Persist skill
+            if state.char_db_id do
+              CharacterSkill.upsert_skill(state.char_db_id, sid, slvl)
+            end
+
+            # Persist SP
+            if state.char_db_id do
+              Repo.update_all(
+                from(c in Character, where: c.id == ^state.char_db_id),
+                set: [sp: new_sp]
+              )
+            end
+
+            send(
+              state.conn_pid,
+              {:send_packet, %Server.AcquireSkillDone{skill_id: sid, skill_level: slvl}}
+            )
+
+            sp_update = %Server.StatusUpdate{
+              object_id: state.char_id,
+              attributes: [{Server.StatusUpdate.attr_sp(), new_sp}]
+            }
+
+            send(state.conn_pid, {:send_packet, sp_update})
+            send(state.conn_pid, {:send_packet, build_skill_list_packet(new_skills)})
+
+            {:noreply, %{state | sp: new_sp, skills: new_skills}}
+        end
+    end
+  end
+
+  defp handle_packet(%L2E.Packet.Client.RequestAcquireSkill{}, state), do: {:noreply, state}
+
   defp handle_packet(packet, state) do
     Logger.debug("[PlayerSession] Unhandled packet: #{inspect(packet.__struct__)}")
     {:noreply, state}
@@ -2337,6 +2732,60 @@ defmodule L2E.Session.PlayerSession do
 
   defp broadcast_user_info(_state), do: :ok
 
+  # ---- M45: Class Advancement -----------------------------------------------
+
+  defp do_class_change(state, target_class_id) do
+    if ClassAdvancementTable.can_advance?(state.class_id || 0, target_class_id, state.level) do
+      # Persist the new class_id to DB
+      if state.char_db_id do
+        Repo.get!(Character, state.char_db_id)
+        |> Ecto.Changeset.change(%{class_id: target_class_id})
+        |> Repo.update!()
+      end
+
+      # Merge starting skills (level 1 skills of new class) into player's skill map
+      new_skills =
+        SkillLearnTable.get_learnable_skills(target_class_id, 1)
+        |> Enum.reduce(state.skills, fn %{skill_id: sid, skill_level: slvl}, acc ->
+          if state.char_db_id do
+            CharacterSkill.upsert_skill(state.char_db_id, sid, slvl)
+          end
+
+          Map.put(acc, sid, slvl)
+        end)
+
+      new_state = %{state | class_id: target_class_id, skills: new_skills}
+
+      # Level-up animation (action_id 16)
+      send(
+        state.conn_pid,
+        {:send_packet, %Server.SocialAction{object_id: state.char_id, action_id: 16}}
+      )
+
+      # Refresh UserInfo for the client
+      broadcast_user_info(new_state)
+
+      Logger.info(
+        "[PlayerSession] char_id=#{state.char_id} advanced to class_id=#{target_class_id}"
+      )
+
+      {:noreply, new_state}
+    else
+      send(
+        state.conn_pid,
+        {:send_packet,
+         %Server.CreatureSay{
+           char_id: state.char_id,
+           chat_type: 2,
+           char_name: "System",
+           message: "Requirements not met for this class change."
+         }}
+      )
+
+      {:noreply, state}
+    end
+  end
+
   defp find_session_by_name(char_name) do
     # Iterate registry to find a session by character name
     # This is O(n) but acceptable for now; a name→id ETS table could speed this up.
@@ -2507,6 +2956,38 @@ defmodule L2E.Session.PlayerSession do
           :ignored ->
             {:noreply, state}
         end
+
+      String.starts_with?(cmd, "ClassChange ") ->
+        target_class_id =
+          cmd
+          |> String.split(" ", parts: 2)
+          |> List.last()
+          |> String.to_integer()
+
+        do_class_change(state, target_class_id)
+
+      cmd == "ClassList" ->
+        transitions = ClassAdvancementTable.get_transitions(state.class_id || 0)
+
+        html =
+          if transitions == [] do
+            "<html><body>No class changes are available for your current class.</body></html>"
+          else
+            links =
+              Enum.map_join(transitions, "", fn t ->
+                ~s[<a action="bypass ClassChange #{t.target_class_id}">#{t.name} (Level #{t.min_level}+)</a><br>]
+              end)
+
+            "<html><body>Choose your class advancement:<br>" <> links <> "</body></html>"
+          end
+
+        send(state.conn_pid, {:send_packet, %Server.NpcHtmlMessage{npc_object_id: 0, html: html}})
+        {:noreply, state}
+
+      String.starts_with?(cmd, "Quest ") ->
+        "Quest " <> rest = cmd
+        [quest_name | args] = String.split(rest, " ")
+        handle_quest_bypass(quest_name, args, state)
 
       true ->
         {:noreply, state}
@@ -2729,6 +3210,62 @@ defmodule L2E.Session.PlayerSession do
     if Inventory.get_adena_count(char_id) >= cost, do: :ok, else: {:error, :insufficient_adena}
   end
 
+  # M43: Validate that a seller's offered items match the owner's buy list.
+  # Returns {:ok, total_cost, validated_items} or {:error, reason}.
+  defp validate_buy_from_request(buy_list, items) do
+    result =
+      Enum.reduce_while(items, {:ok, 0, []}, fn item, {:ok, acc_cost, acc_valid} ->
+        case Enum.find(buy_list, fn e -> e.item_id == item.item_id end) do
+          nil ->
+            {:halt, {:error, :item_not_in_buy_list}}
+
+          entry ->
+            if item.count > entry.count do
+              {:halt, {:error, :count_exceeds_buy_list}}
+            else
+              cost = entry.price * item.count
+
+              validated = %{
+                item_id: item.item_id,
+                count: item.count,
+                price: entry.price,
+                object_id: Map.get(item, :object_id, 0)
+              }
+
+              {:cont, {:ok, acc_cost + cost, [validated | acc_valid]}}
+            end
+        end
+      end)
+
+    case result do
+      {:ok, total, validated} -> {:ok, total, Enum.reverse(validated)}
+      err -> err
+    end
+  end
+
+  # M43: Subtract sold counts from the buy list; remove fully-filled entries.
+  defp reduce_buy_list(buy_list, sold_items) do
+    sold_map = Map.new(sold_items, fn item -> {item.item_id, item.count} end)
+
+    buy_list
+    |> Enum.map(fn entry ->
+      sold = Map.get(sold_map, entry.item_id, 0)
+      %{entry | count: entry.count - sold}
+    end)
+    |> Enum.reject(fn entry -> entry.count <= 0 end)
+  end
+
+  # M43: Check the seller actually holds all offered items (prevents phantom sells).
+  defp validate_seller_has_items(char_id, items) do
+    inv_items = Inventory.get_items(char_id)
+    inv_map = Map.new(inv_items, fn {inst, _} -> {inst.id, inst.count || 1} end)
+
+    Enum.all?(items, fn item ->
+      obj_id = Map.get(item, :object_id, 0)
+      Map.get(inv_map, obj_id, 0) >= Map.get(item, :count, 1)
+    end)
+  end
+
   # -----------------------------------------------------------------------
   # Inventory helpers
   # -----------------------------------------------------------------------
@@ -2805,18 +3342,28 @@ defmodule L2E.Session.PlayerSession do
 
   # Default skill set: all characters get these 5 skills in M8.
   # Per-class skill assignment will be done in M16.
-  @default_skills [{1, 1}, {3, 1}, {4, 1}, {68, 1}, {84, 1}]
+  @default_skills %{1 => 1, 3 => 1, 4 => 1, 68 => 1, 84 => 1}
 
   defp load_char_skills(char_id) do
-    case Repo.all(
-           from(s in "char_skills",
-             where: s.char_id == ^char_id,
-             select: {s.skill_id, s.level}
-           )
-         ) do
+    case CharacterSkill.load_for_character(char_id) do
       [] -> @default_skills
-      rows -> rows
+      rows -> Map.new(rows, fn s -> {s.skill_id, s.skill_level} end)
     end
+  end
+
+  # M47: Load all quest rows for this character into the in-memory quests map.
+  defp load_char_quests(char_id) do
+    CharacterQuest.load_for_character(char_id)
+    |> Enum.into(%{}, fn q ->
+      {q.quest_id, %{state: q.state, cond: q.cond, count: q.count, reward_taken: q.reward_taken}}
+    end)
+  end
+
+  # M47: Quest bypass handler — infrastructure stub; quest-specific logic lives in quest modules.
+  defp handle_quest_bypass(quest_name, _args, state) do
+    require Logger
+    Logger.debug("[Quest] Bypass for quest: #{quest_name}")
+    {:noreply, state}
   end
 
   defp build_skill_list_packet(skills) do
@@ -2832,10 +3379,7 @@ defmodule L2E.Session.PlayerSession do
   end
 
   defp level_from_skills(skills, skill_id) do
-    case Enum.find(skills, fn {id, _lvl} -> id == skill_id end) do
-      {_id, lvl} -> lvl
-      nil -> 1
-    end
+    Map.get(skills, skill_id, 1)
   end
 
   defp fetch_skill_template(skill_id, level) do

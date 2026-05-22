@@ -1880,3 +1880,202 @@ defmodule L2E.Packet.Server.PrivateStoreListSell do
       items_bin
   end
 end
+
+# ---- M43: Private Store — Buy packets ----------------------------------------
+
+defmodule L2E.Packet.Server.PrivateStoreMsgBuy do
+  @moduledoc "0xB9 — broadcasts that a player opened (or closed) a buy store."
+  @behaviour L2E.Packet.Encodable
+
+  defstruct [:object_id, :title]
+  @type t :: %__MODULE__{}
+
+  @opcode 0xB9
+
+  @impl L2E.Packet.Encodable
+  def encode(%__MODULE__{object_id: object_id, title: title}) do
+    title_bin =
+      :unicode.characters_to_binary(title || "", :utf8, {:utf16, :little}) <> <<0, 0>>
+
+    <<@opcode::8, object_id::little-32>> <> title_bin
+  end
+end
+
+defmodule L2E.Packet.Server.PrivateStoreManageListBuy do
+  @moduledoc """
+  0xB7 — sends the owner's adena balance and current buy-list configuration
+  back to the owner when they open the buy-store management UI.
+
+  available_items: inventory items the owner has (shown on the left panel so the
+    client can populate the \"what I want to buy\" list). Optional — an empty list
+    is accepted by the client.
+
+  buy_list: items already configured in the buy store.
+    Each entry: %{item_id, count, price, ref_price \\\\ 0, bodypart \\\\ 0, type2 \\\\ 0}
+  """
+  @behaviour L2E.Packet.Encodable
+
+  defstruct [:owner_id, :adena, :available_items, :buy_list]
+  @type t :: %__MODULE__{}
+
+  @opcode 0xB7
+
+  @impl L2E.Packet.Encodable
+  def encode(%__MODULE__{
+        owner_id: owner_id,
+        adena: adena,
+        available_items: available_items,
+        buy_list: buy_list
+      }) do
+    avail = available_items || []
+    buy = buy_list || []
+
+    avail_bin =
+      Enum.reduce(avail, <<length(avail)::little-32>>, fn item, acc ->
+        acc <>
+          <<Map.get(item, :item_id, 0)::little-32, 0::little-16,
+            Map.get(item, :count, 0)::little-32, Map.get(item, :ref_price, 0)::little-32,
+            0::little-16, Map.get(item, :bodypart, 0)::little-32,
+            Map.get(item, :type2, 0)::little-16>>
+      end)
+
+    buy_bin =
+      Enum.reduce(buy, <<length(buy)::little-32>>, fn item, acc ->
+        acc <>
+          <<Map.get(item, :item_id, 0)::little-32, 0::little-16,
+            Map.get(item, :count, 0)::little-32, Map.get(item, :ref_price, 0)::little-32,
+            0::little-16, Map.get(item, :bodypart, 0)::little-32,
+            Map.get(item, :type2, 0)::little-16>>
+      end)
+
+    <<@opcode::8, owner_id::little-32, adena::little-32>> <> avail_bin <> buy_bin
+  end
+end
+
+defmodule L2E.Packet.Server.PrivateStoreListBuy do
+  @moduledoc """
+  0xB8 — sends a buyer's active buy-store list to potential sellers who click on them.
+
+  items: each entry must contain at minimum: item_id, count, price.
+    Optional: obj_id (0 if absent), enchant (0), ref_price (0), bodypart (0), type2 (0).
+  """
+  @behaviour L2E.Packet.Encodable
+
+  defstruct [:owner_id, :owner_adena, :items]
+  @type t :: %__MODULE__{}
+
+  @opcode 0xB8
+
+  @impl L2E.Packet.Encodable
+  def encode(%__MODULE__{owner_id: owner_id, owner_adena: owner_adena, items: items}) do
+    store_items = items || []
+
+    items_bin =
+      Enum.reduce(store_items, <<length(store_items)::little-32>>, fn item, acc ->
+        count = Map.get(item, :count, 0)
+
+        acc <>
+          <<Map.get(item, :obj_id, 0)::little-32, Map.get(item, :item_id, 0)::little-32,
+            Map.get(item, :enchant, 0)::little-16, count::little-32,
+            Map.get(item, :ref_price, 0)::little-32, 0::little-16,
+            Map.get(item, :bodypart, 0)::little-32, Map.get(item, :type2, 0)::little-16,
+            Map.get(item, :price, 0)::little-32, count::little-32>>
+      end)
+
+    <<@opcode::8, owner_id::little-32, owner_adena || 0::little-32>> <> items_bin
+  end
+end
+
+# ---- M44: Skill Learn packets ------------------------------------------------
+
+defmodule L2E.Packet.Server.AcquireSkillInfo do
+  @moduledoc """
+  0x8B — responds to RequestAcquireSkillInfo with the skill's SP cost and
+  minimum character level required to learn it.
+
+  `acquire_type` is sent as 0 (CLASS skill) for all normal class skills.
+  No item requirements are sent (the `reqs` list size is always 0 here).
+  """
+  @behaviour L2E.Packet.Encodable
+
+  defstruct [:skill_id, :skill_level, :sp_cost, :min_level]
+  @type t :: %__MODULE__{}
+
+  @opcode 0x8B
+
+  @impl L2E.Packet.Encodable
+  def encode(%__MODULE__{skill_id: skill_id, skill_level: skill_level, sp_cost: sp_cost}) do
+    <<
+      @opcode::8,
+      skill_id || 0::little-32,
+      skill_level || 1::little-32,
+      sp_cost || 0::little-32,
+      # acquire_type = 0 (CLASS)
+      0::little-32,
+      # item requirement count = 0
+      0::little-32
+    >>
+  end
+end
+
+defmodule L2E.Packet.Server.AcquireSkillDone do
+  @moduledoc "0x8E — confirms that the server processed a skill-learn request."
+  @behaviour L2E.Packet.Encodable
+
+  # skill_id and skill_level are stored for logging only; not sent in the packet.
+  defstruct [:skill_id, :skill_level]
+  @type t :: %__MODULE__{}
+
+  @opcode 0x8E
+
+  @impl L2E.Packet.Encodable
+  def encode(%__MODULE__{}) do
+    <<@opcode::8>>
+  end
+end
+
+defmodule L2E.Packet.Server.DoorInfo do
+  @moduledoc """
+  Opcode 0x31 — sends initial door state to the client when entering a zone.
+
+  Binary layout (DoorInfo.java):
+    door_id(32LE) show_hp(8) is_open(8) is_attackable(8)
+    max_hp(32LE) current_hp(32LE) x(32LE) y(32LE) z(32LE)
+
+  Reference: ServerPackets.DOOR_INFO(0x31)
+  """
+  @behaviour L2E.Packet.Encodable
+
+  defstruct [:door_id, :is_open, :max_hp, :current_hp, :x, :y, :z]
+  @type t :: %__MODULE__{}
+
+  @opcode 0x31
+
+  @impl L2E.Packet.Encodable
+  def encode(%__MODULE__{} = p) do
+    <<@opcode::8, p.door_id::little-32, 0::8, p.is_open::8, 0::8, p.max_hp || 0::little-32,
+      p.current_hp || 0::little-32, p.x || 0::little-32, p.y || 0::little-32,
+      p.z || 0::little-32>>
+  end
+end
+
+defmodule L2E.Packet.Server.DoorStatusUpdate do
+  @moduledoc """
+  Opcode 0x2C — broadcast door open/close state change.
+
+  Binary layout (DoorStatusUpdate.java): door_id(32LE) is_open(8)
+
+  Reference: ServerPackets.DOOR_STATUS_UPDATE(0x2C)
+  """
+  @behaviour L2E.Packet.Encodable
+
+  defstruct [:door_id, :is_open]
+  @type t :: %__MODULE__{}
+
+  @opcode 0x2C
+
+  @impl L2E.Packet.Encodable
+  def encode(%__MODULE__{} = p) do
+    <<@opcode::8, p.door_id::little-32, p.is_open::8>>
+  end
+end

@@ -104,6 +104,9 @@ graph TB
         App --> EnchTbl[Data.EnchantData<br/>ETS]
         App --> ZoneTbl[Zone.ZoneTable<br/>ETS]
         App --> HtmCache[Data.HtmCache<br/>Agent]
+        App --> SkillLearn[Data.SkillLearnTable<br/>ETS]
+        App --> ClassAdv[Data.ClassAdvancementTable<br/>ETS]
+        App --> Geodata[Geodata<br/>GenServer stub]
         App --> SessionReg[Session.Registry<br/>:unique]
         App --> SessionSup[Session.Supervisor<br/>DynamicSupervisor]
         App --> WorldSup[World.Supervisor]
@@ -114,6 +117,8 @@ graph TB
         App --> ClanSup[Clan.Supervisor<br/>DynamicSupervisor]
         App --> WrhSup[Warehouse.Supervisor]
         App --> TradeSup[Trade.Supervisor]
+        App --> InstSup[Instance.Supervisor<br/>DynamicSupervisor]
+        App --> InstMgr[Instance.Manager<br/>ETS registry]
         App --> LoginSup[LoginServer.Supervisor]
         App --> NetSup[Network.Supervisor]
     end
@@ -407,17 +412,23 @@ L2E:      1.0   2.0   3.9   7.8   15.4  (near-linear)
 | M40 – HtmCache | `L2E.Data.HtmCache` Agent with lazy file loading from `priv/game/data/html/`; `%VAR%` token substitution; `open_npc_dialog` tries file HTML first, falls back to procedurally generated dialog |
 | M41 – Flood Protectors | Per-opcode sliding-window rate limiter in `ConnectionHandler`; default 15 pkt/s, strict 5 pkt/s for combat opcodes (0x01 / 0x0A / 0x2C); excess packets silently dropped without disconnecting |
 | M42 – GM Admin Commands | `accounts.access_level` DB column; `L2E.Admin.CommandHandler` parser; `admin_spawn`, `admin_teleport`, `admin_kick`, `admin_invisible` bypass commands; all gated on `access_level > 0` loaded at AuthLogin |
+| M43 – Private Store (buy side) | Buy-side private store: open/close buy shop, `SetPrivateStoreListBuy`, buyer-initiated purchase with atomic inventory transfer; `RequestPrivateStoreManageBuy` / `SetPrivateStoreListBuy` / `RequestPrivateStoreSell` / `RequestPrivateStoreQuitBuy` (0x90/91/96/8D) packets |
+| M44 – Skill Tree + Learn | `SkillLearnTable` ETS GenServer with per-class learn data; `RequestAcquireSkillInfo` tooltip; `RequestAcquireSkill` → SP cost validation → `CharacterSkill` DB upsert; `AcquireSkillInfo` / `AcquireSkillDone` server packets; `character_skills` DB table |
+| M45 – Class Advancement | `ClassAdvancementTable` ETS GenServer with Human class transition rules; bypass-triggered class change with level validation, DB class_id update, starting skill grant, `SocialAction` animation; `RequestGotoLobby` (0xBA) handler for clean return to char select |
+| M46 – Geodata (interface) | `L2E.Geodata` GenServer with `can_move_to?/6`, `can_see_target?/6`, `get_height/3` public API; stub always returns passable; designed for future `.geo` file loading without interface changes |
+| M47 – Quest Infrastructure | `character_quests` DB table + `CharacterQuest` Ecto schema; per-character quest state (`state`, `cond`, `count`, `reward_taken`) loaded at world entry; `quest_progress` / `quest_complete` cast handlers; quest bypass dispatch stub; `get_quest_state/2` public API |
+| M48 – Instance Zones + Doors | `L2E.Instance.Supervisor` (DynamicSupervisor) + `L2E.Instance.Zone` (GenServer with 1-hour TTL, player monitoring, per-door open/close state, AOI broadcast on door change) + `L2E.Instance.Manager` (ETS registry mapping party → instance pid); `DoorInfo` (0x31) / `DoorStatusUpdate` (0x2C) server packets |
 
 ### Next
 
 | Milestone | Description |
 |-----------|-------------|
-| M43 – Private Store (buy side) | Buy-side private store: open/close buy shop, `SetPrivateStoreListBuy`, buyer-initiated purchase flow |
-| M44 – Siege system | Castle siege zone lifecycle, siege flag placement, attacker/defender clan logic, siege scheduler |
-| M45 – Quest system expansion | Additional quest chains, repeatable quests, quest item rewards, NPC quest markers |
-| M46 – Geodata validation | Replace permissive stubs with real `.l2j` geodata for movement blocking and LOS checks |
-| M47 – Nodule / augmentation | Item augmentation system, active/passive augment skills |
-| M48 – Distributed nodes | Multi-node BEAM cluster via `libcluster`; region handoff across nodes; login server HA |
+| M49 – Siege system | Castle siege zone lifecycle, siege flag placement, attacker/defender clan logic, siege scheduler, `SiegeSupervisor` isolated subtree |
+| M50 – Olympiad | Match registration, 1v1 arena instance, score tracking, `OlympiadManager` GenServer |
+| M51 – Grand Bosses | Boss spawn tables, respawn window tracking, epic jewelry drops, world-announce on death |
+| M52 – Real geodata | Parse `.l2j` / binary geodata files into ETS; replace permissive stubs with actual NSWE passability checks and height map lookups |
+| M53 – Augmentation | Item augmentation system, active/passive augment skills, `RequestConfirmTargetItem` + `RequestRefineItem` packets |
+| M54 – Distributed nodes | Multi-node BEAM cluster via `libcluster`; region handoff across nodes; login server HA |
 
 ---
 

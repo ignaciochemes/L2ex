@@ -86,6 +86,19 @@ defmodule L2E.Packet.Decoder do
   def decode(0x77, body), do: Client.SetPrivateStoreMsgSell.decode(body)
   def decode(0x79, body), do: Client.RequestPrivateStoreBuy.decode(body)
 
+  # M44: Skill tree + learn
+  def decode(0x6B, body), do: Client.RequestAcquireSkillInfo.decode(body)
+  def decode(0x6C, body), do: Client.RequestAcquireSkill.decode(body)
+
+  # M43: Private store — buy
+  def decode(0x90, body), do: Client.RequestPrivateStoreManageBuy.decode(body)
+  def decode(0x91, body), do: Client.SetPrivateStoreListBuy.decode(body)
+  def decode(0x96, body), do: Client.RequestPrivateStoreSell.decode(body)
+  def decode(0x8D, body), do: Client.RequestPrivateStoreQuitBuy.decode(body)
+
+  # M45: Class advancement
+  def decode(0xBA, body), do: Client.RequestGotoLobby.decode(body)
+
   # ── Extended two-byte opcode space (0xD0 prefix) ────────────────────────────
   # Body starts with a little-endian 16-bit sub-opcode, then the real payload.
 

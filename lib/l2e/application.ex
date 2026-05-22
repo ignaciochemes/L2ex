@@ -22,6 +22,15 @@ defmodule L2E.Application do
       L2E.Data.DropTable,
       L2E.Zone.ZoneTable,
       L2E.Data.HtmCache,
+      L2E.Data.SkillLearnTable,
+      L2E.Data.ClassAdvancementTable,
+
+      # Geodata movement/LOS validation (stub until .geo files are loaded)
+      L2E.Geodata,
+
+      # Instance zone infrastructure: supervisor first, then manager
+      L2E.Instance.Supervisor,
+      L2E.Instance.Manager,
 
       # Registry for looking up PlayerSession pids by char_id
       {Registry, keys: :unique, name: L2E.Session.Registry},

@@ -35,6 +35,8 @@ defmodule L2E.DB.Character do
     field(:pk_kills, :integer, default: 0)
     field(:last_access, :utc_datetime)
     timestamps(type: :utc_datetime)
+    has_many(:skills, L2E.DB.CharacterSkill)
+    has_many(:quests, L2E.DB.CharacterQuest)
   end
 
   @spec create_changeset(map()) :: Ecto.Changeset.t()
