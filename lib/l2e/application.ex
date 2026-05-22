@@ -24,6 +24,12 @@ defmodule L2E.Application do
       L2E.Data.HtmCache,
       L2E.Data.SkillLearnTable,
       L2E.Data.ClassAdvancementTable,
+      L2E.Data.HennaTable,
+      L2E.Data.RecipeTable,
+      L2E.Data.OptionTable,
+
+      # M50: Quest script registry — ETS-backed, must start before any player session
+      L2E.Quest.Registry,
 
       # Geodata movement/LOS validation (stub until .geo files are loaded)
       L2E.Geodata,

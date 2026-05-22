@@ -58,6 +58,13 @@
 - Created `lib/l2e/db/character_quest.ex` — `L2E.DB.CharacterQuest` schema with `belongs_to :character`, `quest_id`, `state`, `cond`, `count`, `reward_taken`; changeset validates state inclusion in `[0,1,2]` and non-negative `cond`/`count`; implements `load_for_character/1`, `get_quest/2`, `set_quest_state/5` (upsert via `on_conflict: :replace_all`), `complete_quest/2`
 - Updated `lib/l2e/db/character.ex` — added `has_many :quests, L2E.DB.CharacterQuest` after `has_many :skills`
 
+## M50 — Quest Scripts (2026-05-22)
+
+- Created `lib/l2e/quest/scripts/new_adventurer.ex` — `L2E.Quest.Scripts.NewAdventurer`; quest_id 255; NPC 30008 (Newbie Guide); no kill req; level gate 5 for reward; rewards 3000 adena + 5 Scroll of Escape
+- Created `lib/l2e/quest/scripts/exploration_of_giants_cave.ex` — `L2E.Quest.Scripts.ExplorationOfGiantsCave`; quest_id 213; NPC 30516 (Researcher Lorain); kill 10 Cave Servants (NPC 20678); rewards 50000 adena + 1 Enchant Scroll Weapon D
+- Created `lib/l2e/quest/scripts/path_of_warrior.ex` — `L2E.Quest.Scripts.PathOfWarrior`; quest_id 211; NPC 30017 (Master Auron); class change pre-quest for Human Fighter (class_id 0); level gate 19; reward Mark of Warrior (item_id 1665)
+- All scripts `use L2E.Quest.Engine` (Dallas's DSL); no wiring into application.ex or player_session.ex
+
 ## Learnings
 
 ### M44 — Character Skills DB (2026-05-22)
@@ -69,3 +76,10 @@
 - `on_conflict: :replace_all` is appropriate for `set_quest_state` (full row replacement is idempotent); for `complete_quest`, use `on_conflict: [set: [state: 2, reward_taken: true]]` to preserve `cond`/`count` counters set by game logic.
 - Migration number `20260522000005` follows the existing sequential convention — check the last migration number in `priv/repo/migrations/` before creating a new one.
 - `state` integer (0/1/2) is the L2J convention; do NOT introduce an Ecto enum — packet serialization downstream expects integers.
+
+### M55 — Data Tables: Henna, Recipes, Augmentation (2026-05-22)
+- Created `lib/l2e/data/henna_table.ex` — ETS `:henna_table`; 8 hardcoded L2 Interlude hennas; `get/1`, `get_all/0`, `get_dye_for_item/1`
+- Created `lib/l2e/data/recipe_table.ex` — ETS `:recipe_table`; 6 hardcoded recipes (4 from spec + 2 extras); `get/1`, `get_for_item/1`, `get_common_recipes/0`
+- Created `lib/l2e/data/option_table.ex` — ETS `:option_table`; 8 hardcoded augmentation options; `get/1`, `get_random_option/1` (grade → id range)
+- Modified `lib/l2e/application.ex` — added `L2E.Data.HennaTable`, `L2E.Data.RecipeTable`, `L2E.Data.OptionTable` after `ClassAdvancementTable`
+- Pattern: no XML loading, no Ecto, no DB tables — pure ETS with hardcoded seed data, same as SkillLearnTable

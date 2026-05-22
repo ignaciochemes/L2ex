@@ -418,17 +418,20 @@ L2E:      1.0   2.0   3.9   7.8   15.4  (near-linear)
 | M46 – Geodata (interface) | `L2E.Geodata` GenServer with `can_move_to?/6`, `can_see_target?/6`, `get_height/3` public API; stub always returns passable; designed for future `.geo` file loading without interface changes |
 | M47 – Quest Infrastructure | `character_quests` DB table + `CharacterQuest` Ecto schema; per-character quest state (`state`, `cond`, `count`, `reward_taken`) loaded at world entry; `quest_progress` / `quest_complete` cast handlers; quest bypass dispatch stub; `get_quest_state/2` public API |
 | M48 – Instance Zones + Doors | `L2E.Instance.Supervisor` (DynamicSupervisor) + `L2E.Instance.Zone` (GenServer with 1-hour TTL, player monitoring, per-door open/close state, AOI broadcast on door change) + `L2E.Instance.Manager` (ETS registry mapping party → instance pid); `DoorInfo` (0x31) / `DoorStatusUpdate` (0x2C) server packets |
+| M49 – Skill Effects (CC / DoT / Charge / Toggle) | New `effect_type` variants: `:stun` / `:root` (CC with MEN-based resist check via `Effect.check_cc_lands?/2`), `:dot_hp` (HP damage-over-time ticks via `Effect.dot_tick_damage/2`), `:charge` (Gladiator Momentum stacks, max 10), `:toggle` (MP-drain skills with per-tick timer); `cc_state / dots / charge_count / toggle_skills` in `PlayerSession` state; CC guards block movement/attack/cast; `NPC.Instance.apply_cc/3` + `apply_dot/5` public API with stun blocking on `auto_attack_tick` |
+| M50 – Quest DSL + Scripts | `L2E.Quest.Engine` behaviour macro; `L2E.Quest.Registry` ETS GenServer auto-registering quest modules; `L2E.Quest.Handler` dispatcher (`dispatch_kill/3`, `dispatch_talk/4`); `PlayerSession` hooks: `{:npc_killed_for_quest, template_id}` cast + `"Quest "` bypass prefix; 3 quest scripts: `NewAdventurer` (q.255, Newbie Guide, level-5 gate), `ExplorationOfGiantsCave` (q.213, kill 10 Cave Servants), `PathOfWarrior` (q.211, Human Fighter class-change pre-quest) |
+| M51 – Data Tables (Henna / Recipe / Augmentation) | `L2E.Data.HennaTable` ETS GenServer (8 hennas: Lion→Princess; `get/1`, `get_all/0`, `get_dye_for_item/1`); `L2E.Data.RecipeTable` ETS GenServer (6 recipes; `get/1`, `get_for_item/1`, `get_common_recipes/0`); `L2E.Data.OptionTable` ETS GenServer for Life Stone augmentation options (8 options across :low/:mid/:top/:ancient grades; `get/1`, `get_random_option/1`); all three added to supervision tree |
 
 ### Next
 
 | Milestone | Description |
 |-----------|-------------|
-| M49 – Siege system | Castle siege zone lifecycle, siege flag placement, attacker/defender clan logic, siege scheduler, `SiegeSupervisor` isolated subtree |
-| M50 – Olympiad | Match registration, 1v1 arena instance, score tracking, `OlympiadManager` GenServer |
-| M51 – Grand Bosses | Boss spawn tables, respawn window tracking, epic jewelry drops, world-announce on death |
 | M52 – Real geodata | Parse `.l2j` / binary geodata files into ETS; replace permissive stubs with actual NSWE passability checks and height map lookups |
-| M53 – Augmentation | Item augmentation system, active/passive augment skills, `RequestConfirmTargetItem` + `RequestRefineItem` packets |
-| M54 – Distributed nodes | Multi-node BEAM cluster via `libcluster`; region handoff across nodes; login server HA |
+| M53 – Olympiad | Match registration, 1v1 arena instance, score tracking, `OlympiadManager` GenServer |
+| M54 – Siege system | Castle siege zone lifecycle, siege flag placement, attacker/defender clan logic, siege scheduler, `SiegeSupervisor` isolated subtree |
+| M55 – Grand Bosses | Boss spawn tables, respawn window tracking, epic jewelry drops, world-announce on death |
+| M56 – Pets & Summons | Pet `GenServer` linked to owner session; summon skill → spawn pet NPC; feed / unsummon; pet stats from `PetDataTable` |
+| M57 – Augmentation gameplay | Henna engraving handler (3 slots, stat bonus in paperdoll); `RequestRecipeItemMakeSelf` crafting flow; `RequestConfirmTargetItem` + `RequestRefineItem` Life Stone augmentation applying `OptionTable` results to `ItemInstance` |
 
 ---
 

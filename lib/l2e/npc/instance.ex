@@ -69,6 +69,16 @@ defmodule L2E.NPC.Instance do
     GenServer.cast(npc_pid, {:take_damage, amount, from_pid})
   end
 
+  @doc "Apply crowd control to this NPC."
+  def apply_cc(pid, cc_type, duration_ms) do
+    GenServer.cast(pid, {:apply_cc, cc_type, duration_ms})
+  end
+
+  @doc "Apply a damage-over-time effect to this NPC."
+  def apply_dot(pid, skill_id, damage_per_tick, tick_ms, ticks_left) do
+    GenServer.cast(pid, {:apply_dot, skill_id, damage_per_tick, tick_ms, ticks_left})
+  end
+
   @doc "Returns the NPC's current stats map (for combat resolver)."
   def get_stats(npc_pid) do
     GenServer.call(npc_pid, :get_stats)
@@ -109,7 +119,9 @@ defmodule L2E.NPC.Instance do
       target_id: nil,
       region_pid: region_pid,
       attack_timer: nil,
-      leash_timer: leash_timer
+      leash_timer: leash_timer,
+      stunned: false,
+      stun_timer: nil
     }
 
     Logger.debug(
@@ -186,6 +198,21 @@ defmodule L2E.NPC.Instance do
     end
   end
 
+  # M49: Apply crowd control
+  def handle_cast({:apply_cc, :stun, duration_ms}, state) do
+    if state.stun_timer, do: Process.cancel_timer(state.stun_timer)
+    timer = Process.send_after(self(), :stun_expired, duration_ms)
+    {:noreply, %{state | stunned: true, stun_timer: timer}}
+  end
+
+  def handle_cast({:apply_cc, _cc_type, _duration_ms}, state), do: {:noreply, state}
+
+  # M49: Apply DoT
+  def handle_cast({:apply_dot, _skill_id, damage_per_tick, tick_ms, ticks_left}, state) do
+    Process.send_after(self(), {:dot_tick, damage_per_tick, tick_ms, ticks_left}, tick_ms)
+    {:noreply, state}
+  end
+
   # -----------------------------------------------------------------------
   # AOI broadcasts from Region
   # -----------------------------------------------------------------------
@@ -226,6 +253,13 @@ defmodule L2E.NPC.Instance do
   # -----------------------------------------------------------------------
   # Auto-attack tick
   # -----------------------------------------------------------------------
+
+  # M49: Block attack while stunned — reschedule without hitting
+  def handle_info(:auto_attack_tick, %{stunned: true} = state) do
+    atk_ms = round(1000 / (state.template.atk_speed / 500.0))
+    timer = Process.send_after(self(), :auto_attack_tick, atk_ms)
+    {:noreply, %{state | attack_timer: timer}}
+  end
 
   def handle_info(:auto_attack_tick, %{ai_state: :combat, target_pid: target_pid} = state)
       when is_pid(target_pid) do
@@ -306,6 +340,36 @@ defmodule L2E.NPC.Instance do
   end
 
   def handle_info(:corpse_decay, state), do: {:noreply, state}
+
+  # M49: Stun expired
+  def handle_info(:stun_expired, state) do
+    {:noreply, %{state | stunned: false, stun_timer: nil}}
+  end
+
+  # M49: DoT tick
+  def handle_info({:dot_tick, damage_per_tick, tick_ms, ticks_left}, %{ai_state: ai_state} = state)
+      when ai_state != :dead do
+    new_hp = max(0.0, state.hp - damage_per_tick)
+
+    hp_pkt = %Server.StatusUpdate{
+      object_id: state.object_id,
+      attributes: [{0x09, trunc(new_hp)}]
+    }
+
+    if state.region_pid, do: GenServer.cast(state.region_pid, {:broadcast_packet, hp_pkt})
+
+    if new_hp <= 0 do
+      {:noreply, handle_death(%{state | hp: 0.0})}
+    else
+      if ticks_left > 1 do
+        Process.send_after(self(), {:dot_tick, damage_per_tick, tick_ms, ticks_left - 1}, tick_ms)
+      end
+
+      {:noreply, %{state | hp: new_hp}}
+    end
+  end
+
+  def handle_info({:dot_tick, _, _, _}, state), do: {:noreply, state}
 
   def handle_info(msg, state) do
     Logger.debug("[NPC.Instance] Unexpected: #{inspect(msg)}")

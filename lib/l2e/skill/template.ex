@@ -43,7 +43,7 @@ defmodule L2E.Skill.Template do
           name: String.t(),
           type: :active | :passive | :toggle,
           target_type: :one | :self | :aoe | :corpse,
-          effect_type: :p_damage | :m_damage | :heal | :buff | :debuff,
+          effect_type: :p_damage | :m_damage | :heal | :buff | :debuff | :stun | :root | :dot_hp | :charge | :toggle,
           power: integer(),
           mp_cost: non_neg_integer(),
           cast_time_ms: pos_integer(),

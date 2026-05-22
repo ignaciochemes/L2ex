@@ -45,6 +45,29 @@
 - Phoenix.PubSub for AOI/zone broadcasts
 - Message passing for all cross-entity communication
 
+## Gap Analysis Sessions
+
+### 2026-05-22 — Full gap analysis (Fase B complete, M1–M48)
+
+Requested by Ignacio. Deep inventory of L2E vs L2J Mobius CT0 Interlude.
+
+**Findings summary:**
+- L2E is ~42% coverage of L2J reference overall (honest assessment)
+- Packet coverage: 86/215 client (~40%), 66/279 server (~24%)
+- Skill effects: only 3/40 effect types implemented — biggest quality gap in the core loop
+- Quests: 0 actual scripts; DB infrastructure only
+- Endgame (Olympiad proper, Siege, Grand Bosses, SSQ, Clan Hall): ~0%
+- Core gameplay loop (login → move → fight → level): ~90% solid
+
+**Top 3 priorities identified:**
+1. Skill effects (40 types, only 3 done) — blocks correct combat for all classes
+2. Quests (500+ scripts, 0 done) — major content gap
+3. Real geodata (stub) + Olympiad proper — endgame / competitive play
+
+**Recommended M49–M55 scope documented in decision file.**
+
+---
+
 ## Learnings
 
 ### 2026-05-22 — M46 Geodata stub + M48 Instance Zones

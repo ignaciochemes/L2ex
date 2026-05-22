@@ -57,3 +57,16 @@
 - **`load_char_quests/1`** should be called during `handle_continue(:load_character, ...)` alongside `load_char_skills` — not in a separate init step.
 - **Quest bypass stub** using `NpcHtmlMessage{npc_object_id: 0, html: "..."}` is sufficient for MVP; actual quest engine (triggers, conditions, rewards) is a separate milestone.
 - **`handle_cast({:quest_progress, ...}, state)` and `handle_cast({:quest_complete, ...}, state)`** are the correct cast shapes for external quest engine calls into player session — keeps quest logic out of the session process itself.
+
+### M50 — Quest Engine DSL (2026-05-22)
+
+- **New files created:**
+  - `lib/l2e/quest/engine.ex` — Behaviour/macro `use L2E.Quest.Engine`; quest scripts implement `on_first_talk/2`, `on_talk/3`, `on_kill/3`, `on_complete/2`
+  - `lib/l2e/quest/registry.ex` — ETS-backed `GenServer` (`@table :quest_registry`) mapping `{:by_quest_id, quest_id}` → module; `modules_for_kill/1` and `modules_for_npc/1` scan the table by NPC id
+  - `lib/l2e/quest/handler.ex` — Pure dispatcher: `dispatch_kill/3` and `dispatch_talk/4` route events to registered quest modules, return updated quest maps
+- **Files modified:**
+  - `lib/l2e/application.ex` — Added `L2E.Quest.Registry` after `L2E.Data.OptionTable`, before `L2E.Geodata`
+  - `lib/l2e/session/player_session.ex` — Replaced stub `Quest` cond branch in `handle_bypass/2` with `Quest.Handler.dispatch_talk/4` call; added `handle_cast({:npc_killed_for_quest, npc_template_id}, ...)` with DB persistence diff-check; added `handle_cast({:npc_killed_for_quest, _}, state)` fallback
+- **ETS key format:** `{{:by_quest_id, quest_id}, module}` — two-element tuple key to allow multiple quests; lookup via `:ets.lookup(@table, {:by_quest_id, quest_id})`
+- **Existing `Quest ` bypass was a cond branch** (not a separate function clause) — replaced in-place rather than adding a new pattern-matched head
+- **Quest module list in `load_quests/0` is explicit** — no dynamic beam scanning; add modules manually as quest scripts are created

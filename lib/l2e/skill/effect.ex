@@ -53,4 +53,19 @@ defmodule L2E.Skill.Effect do
     healed = power * (1.0 + m_atk / 2000.0) * level_bonus
     max(1, round(healed))
   end
+
+  # M49: CC success check — 80% base, -1% per MEN above 20, clamped 10-95%
+  def check_cc_lands?(caster_stats, target_stats) do
+    caster_level = Map.get(caster_stats, :level, 1)
+    target_men = Map.get(target_stats, :men, 20)
+    base_rate = 0.80 - (target_men - 20) * 0.01
+    rate = :erlang.max(0.10, :erlang.min(0.95, base_rate + caster_level * 0.002))
+    :rand.uniform() <= rate
+  end
+
+  # M49: DoT tick damage — scales with caster's M.Atk for magic DoTs
+  def dot_tick_damage(caster_stats, power) do
+    m_atk = Map.get(caster_stats, :m_atk, 10)
+    max(1, round(power + m_atk * 0.05))
+  end
 end

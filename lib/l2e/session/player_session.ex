@@ -163,7 +163,15 @@ defmodule L2E.Session.PlayerSession do
       # M36: Tracks which warehouse context the player has open (:personal | :clan)
       warehouse_context: :personal,
       # M47: Quest state map — %{quest_id => %{state: 0|1|2, cond: int, count: int, reward_taken: bool}}
-      quests: %{}
+      quests: %{},
+      # M49: Crowd-control flags — %{:stunned | :rooted => timer_ref}
+      cc_state: %{},
+      # M49: Active DoT timers — %{skill_id => timer_ref}
+      dots: %{},
+      # M49: Charge count (Gladiator Momentum, etc.)
+      charge_count: 0,
+      # M49: Active toggle skills — %{skill_id => timer_ref}
+      toggle_skills: %{}
     }
 
     {:ok, state}
@@ -480,6 +488,47 @@ defmodule L2E.Session.PlayerSession do
     {:noreply, %{state | quests: updated}}
   end
 
+  # M50: NPC kill event for quest system
+  def handle_cast({:npc_killed_for_quest, npc_template_id}, %{auth_state: :in_world} = state) do
+    player_info = %{
+      char_id: state.char_id,
+      level: state.level,
+      class_id: state.class_id
+    }
+
+    new_quests = L2E.Quest.Handler.dispatch_kill(npc_template_id, player_info, state.quests)
+
+    Enum.each(new_quests, fn {quest_id, q_state} ->
+      if Map.get(state.quests, quest_id) != q_state do
+        L2E.DB.CharacterQuest.set_quest_state(
+          state.char_id,
+          quest_id,
+          q_state.state,
+          q_state.cond,
+          q_state.count
+        )
+      end
+    end)
+
+    {:noreply, %{state | quests: new_quests}}
+  end
+
+  def handle_cast({:npc_killed_for_quest, _}, state), do: {:noreply, state}
+
+  # M49: Apply crowd control to this player
+  def handle_cast({:apply_cc, cc_type, duration_ms}, state) when cc_type in [:stunned, :rooted] do
+    if ref = Map.get(state.cc_state, cc_type), do: Process.cancel_timer(ref)
+    timer = Process.send_after(self(), {:cc_expired, cc_type}, duration_ms)
+    {:noreply, %{state | cc_state: Map.put(state.cc_state, cc_type, timer)}}
+  end
+
+  # M49: Apply DoT to this player
+  def handle_cast({:apply_dot, skill_id, _level, damage_per_tick, tick_ms, ticks_left}, state) do
+    if ref = Map.get(state.dots, skill_id), do: Process.cancel_timer(ref)
+    timer = Process.send_after(self(), {:dot_tick, skill_id, damage_per_tick, tick_ms, ticks_left}, tick_ms)
+    {:noreply, %{state | dots: Map.put(state.dots, skill_id, timer)}}
+  end
+
   # -----------------------------------------------------------------------
   # AOI broadcasts from Region
   # -----------------------------------------------------------------------
@@ -782,6 +831,105 @@ defmodule L2E.Session.PlayerSession do
                   cast_timer: nil
               }
 
+            :stun ->
+              caster_stats = player_combat_stats(state)
+              target_stats = get_target_stats(target_id, state)
+
+              if Effect.check_cc_lands?(caster_stats, target_stats) do
+                apply_cc_to_target(target_id, :stunned, template.buff_duration_ms, state)
+              end
+
+              %{state | mp: new_mp, cooldowns: new_cooldowns, casting: false, cast_timer: nil}
+
+            :root ->
+              caster_stats = player_combat_stats(state)
+              target_stats = get_target_stats(target_id, state)
+
+              if Effect.check_cc_lands?(caster_stats, target_stats) do
+                apply_cc_to_target(target_id, :rooted, template.buff_duration_ms, state)
+              end
+
+              %{state | mp: new_mp, cooldowns: new_cooldowns, casting: false, cast_timer: nil}
+
+            :dot_hp ->
+              caster_stats = player_combat_stats(state)
+              tick_ms = Map.get(template.stat_bonus, :tick_ms, 3_000)
+              tick_count = Map.get(template.stat_bonus, :tick_count, 10)
+              damage_per_tick = Effect.dot_tick_damage(caster_stats, template.power)
+              apply_dot_to_target(target_id, skill_id, level, damage_per_tick, tick_ms, tick_count, state)
+
+              %{state | mp: new_mp, cooldowns: new_cooldowns, casting: false, cast_timer: nil}
+
+            :charge ->
+              new_charge = min(10, state.charge_count + 1)
+
+              send(
+                state.conn_pid,
+                {:send_packet,
+                 %Server.StatusUpdate{
+                   object_id: state.char_id,
+                   attributes: [{0x21, new_charge}]
+                 }}
+              )
+
+              %{
+                state
+                | mp: new_mp,
+                  cooldowns: new_cooldowns,
+                  casting: false,
+                  cast_timer: nil,
+                  charge_count: new_charge
+              }
+
+            :toggle ->
+              if Map.has_key?(state.toggle_skills, skill_id) do
+                if ref = Map.get(state.toggle_skills, skill_id), do: Process.cancel_timer(ref)
+                new_buffs = Enum.reject(state.buffs, &(&1.skill_id == skill_id))
+                abn = %Server.AbnormalStatusUpdate{effects: new_buffs}
+                send(state.conn_pid, {:send_packet, abn})
+
+                %{
+                  state
+                  | mp: new_mp,
+                    cooldowns: new_cooldowns,
+                    casting: false,
+                    cast_timer: nil,
+                    toggle_skills: Map.delete(state.toggle_skills, skill_id),
+                    buffs: new_buffs
+                }
+              else
+                timer =
+                  Process.send_after(
+                    self(),
+                    {:toggle_tick, skill_id, template.mp_cost},
+                    2_000
+                  )
+
+                buff = %BuffInfo{
+                  skill_id: skill_id,
+                  level: level,
+                  skill_name: template.name,
+                  caster_id: state.char_id,
+                  start_monotonic: now_ms,
+                  duration_ms: 0,
+                  stat_bonus: template.stat_bonus
+                }
+
+                new_buffs = [buff | Enum.reject(state.buffs, &(&1.skill_id == skill_id))]
+                abn = %Server.AbnormalStatusUpdate{effects: new_buffs}
+                send(state.conn_pid, {:send_packet, abn})
+
+                %{
+                  state
+                  | mp: new_mp,
+                    cooldowns: new_cooldowns,
+                    casting: false,
+                    cast_timer: nil,
+                    toggle_skills: Map.put(state.toggle_skills, skill_id, timer),
+                    buffs: new_buffs
+                }
+              end
+
             _ ->
               %{state | mp: new_mp, cooldowns: new_cooldowns, casting: false, cast_timer: nil}
           end
@@ -844,6 +992,66 @@ defmodule L2E.Session.PlayerSession do
   def handle_info({:instance_door_update, door_id, open?}, state) do
     Logger.debug("[Instance] Door #{door_id} is now #{if open?, do: "open", else: "closed"}")
     {:noreply, state}
+  end
+
+  # M49: CC timer expired — remove the flag
+  def handle_info({:cc_expired, cc_type}, state) do
+    {:noreply, %{state | cc_state: Map.delete(state.cc_state, cc_type)}}
+  end
+
+  # M49: DoT tick fires
+  def handle_info({:dot_tick, skill_id, damage_per_tick, tick_ms, ticks_left}, %{dead: false} = state) do
+    new_hp = max(0.0, state.hp - damage_per_tick)
+    send(state.conn_pid, {:send_packet, Server.StatusUpdate.hp_mp(state.char_id, new_hp, state.mp)})
+
+    new_dots =
+      if ticks_left > 1 do
+        timer =
+          Process.send_after(
+            self(),
+            {:dot_tick, skill_id, damage_per_tick, tick_ms, ticks_left - 1},
+            tick_ms
+          )
+
+        Map.put(state.dots, skill_id, timer)
+      else
+        Map.delete(state.dots, skill_id)
+      end
+
+    if new_hp <= 0 do
+      die_pkt = %Server.Die{object_id: state.char_id, can_sweep: false}
+      send(state.conn_pid, {:send_packet, die_pkt})
+      if state.region_pid, do: GenServer.cast(state.region_pid, {:broadcast_packet, die_pkt})
+      cancel_timer(state.attack_timer)
+      cancel_timer(state.regen_timer)
+      Process.send_after(self(), :respawn, 30_000)
+
+      {:noreply,
+       %{state | hp: 0.0, dead: true, attacking: false, attack_timer: nil, regen_timer: nil, dots: new_dots}}
+    else
+      {:noreply, %{state | hp: new_hp, dots: new_dots}}
+    end
+  end
+
+  def handle_info({:dot_tick, _skill_id, _dmg, _ms, _ticks}, state), do: {:noreply, state}
+
+  # M49: Toggle MP drain tick
+  def handle_info({:toggle_tick, skill_id, mp_cost_per_tick}, state) do
+    if Map.has_key?(state.toggle_skills, skill_id) do
+      if state.mp < mp_cost_per_tick do
+        new_buffs = Enum.reject(state.buffs, &(&1.skill_id == skill_id))
+        abn = %Server.AbnormalStatusUpdate{effects: new_buffs}
+        send(state.conn_pid, {:send_packet, abn})
+        {:noreply, %{state | toggle_skills: Map.delete(state.toggle_skills, skill_id), buffs: new_buffs}}
+      else
+        new_mp = state.mp - mp_cost_per_tick
+        send(state.conn_pid, {:send_packet, Server.StatusUpdate.hp_mp(state.char_id, state.hp, new_mp)})
+        timer = Process.send_after(self(), {:toggle_tick, skill_id, mp_cost_per_tick}, 2_000)
+        {:noreply, %{state | mp: new_mp, toggle_skills: Map.put(state.toggle_skills, skill_id, timer)}}
+      end
+    else
+      {:noreply, state}
+    end
   end
 
   def handle_info(msg, state) do
@@ -1203,6 +1411,12 @@ defmodule L2E.Session.PlayerSession do
 
   # ---- MoveToLocation (state :in_world) ----------------------------------
 
+  # M49: Block movement when stunned or rooted
+  defp handle_packet(%L2E.Packet.Client.MoveToLocation{}, %{cc_state: cc} = state)
+       when is_map_key(cc, :stunned) or is_map_key(cc, :rooted) do
+    {:noreply, state}
+  end
+
   defp handle_packet(%L2E.Packet.Client.MoveToLocation{} = move, state) do
     origin = state.position
     new_pos = {move.x, move.y, move.z}
@@ -1336,6 +1550,12 @@ defmodule L2E.Session.PlayerSession do
   end
 
   # ---- AttackRequest (0x0A) — direct attack ------------------------------
+
+  # M49: Block attacks when stunned
+  defp handle_packet(%L2E.Packet.Client.AttackRequest{}, %{cc_state: cc} = state)
+       when is_map_key(cc, :stunned) do
+    {:noreply, state}
+  end
 
   defp handle_packet(%L2E.Packet.Client.AttackRequest{object_id: obj_id}, state) do
     # Block attacks in peace zones
@@ -1490,7 +1710,7 @@ defmodule L2E.Session.PlayerSession do
          %{auth_state: :in_world} = state
        ) do
     case Inventory.remove_item(state.char_id, obj_id, max(1, count)) do
-      {:ok, {instance, template}} ->
+      {:ok, _change_type, {instance, template}} ->
         pkt = %Server.InventoryUpdate{changes: [{3, instance, template}]}
         send(state.conn_pid, {:send_packet, pkt})
 
@@ -1508,7 +1728,7 @@ defmodule L2E.Session.PlayerSession do
          %{auth_state: :in_world} = state
        ) do
     case Inventory.remove_item(state.char_id, obj_id, max(1, count)) do
-      {:ok, {instance, template}} ->
+      {:ok, _change_type, {instance, template}} ->
         pkt = %Server.InventoryUpdate{changes: [{3, instance, template}]}
         send(state.conn_pid, {:send_packet, pkt})
 
@@ -1534,6 +1754,12 @@ defmodule L2E.Session.PlayerSession do
   end
 
   # ---- RequestMagicSkillUse (0x2F) — player activates a skill ------------
+
+  # M49: Block skill use when stunned
+  defp handle_packet(%L2E.Packet.Client.RequestMagicSkillUse{}, %{cc_state: cc} = state)
+       when is_map_key(cc, :stunned) do
+    {:noreply, state}
+  end
 
   defp handle_packet(
          %L2E.Packet.Client.RequestMagicSkillUse{},
@@ -2986,8 +3212,41 @@ defmodule L2E.Session.PlayerSession do
 
       String.starts_with?(cmd, "Quest ") ->
         "Quest " <> rest = cmd
-        [quest_name | args] = String.split(rest, " ")
-        handle_quest_bypass(quest_name, args, state)
+
+        case String.split(rest, " ", parts: 2) do
+          [npc_template_id_str | _] ->
+            case Integer.parse(npc_template_id_str) do
+              {npc_template_id, _} ->
+                player_info = %{
+                  char_id: state.char_id,
+                  level: state.level,
+                  class_id: state.class_id
+                }
+
+                {html, new_quests} =
+                  L2E.Quest.Handler.dispatch_talk(
+                    state.target_id || 0,
+                    npc_template_id,
+                    player_info,
+                    state.quests
+                  )
+
+                if html do
+                  send(state.conn_pid, {:send_packet, %Server.NpcHtmlMessage{
+                    npc_object_id: state.target_id || 0,
+                    html: html
+                  }})
+                end
+
+                {:noreply, %{state | quests: new_quests}}
+
+              _ ->
+                {:noreply, state}
+            end
+
+          _ ->
+            {:noreply, state}
+        end
 
       true ->
         {:noreply, state}
@@ -3359,13 +3618,6 @@ defmodule L2E.Session.PlayerSession do
     end)
   end
 
-  # M47: Quest bypass handler — infrastructure stub; quest-specific logic lives in quest modules.
-  defp handle_quest_bypass(quest_name, _args, state) do
-    require Logger
-    Logger.debug("[Quest] Bypass for quest: #{quest_name}")
-    {:noreply, state}
-  end
-
   defp build_skill_list_packet(skills) do
     skill_maps =
       Enum.map(skills, fn {skill_id, level} ->
@@ -3424,6 +3676,43 @@ defmodule L2E.Session.PlayerSession do
     end
 
     _ = {target_id, damage, state}
+    :ok
+  end
+
+  # M49: Send CC to target (NPC or player)
+  defp apply_cc_to_target(target_id, cc_type, duration_ms, state) do
+    case find_npc_pid(target_id) do
+      nil ->
+        case Registry.lookup(L2E.Session.Registry, target_id) do
+          [{pid, _}] -> GenServer.cast(pid, {:apply_cc, cc_type, duration_ms})
+          [] -> :ok
+        end
+
+      npc_pid ->
+        L2E.NPC.Instance.apply_cc(npc_pid, cc_type, duration_ms)
+    end
+
+    _ = state
+    :ok
+  end
+
+  # M49: Send DoT to target (NPC or player)
+  defp apply_dot_to_target(target_id, skill_id, level, damage_per_tick, tick_ms, ticks_left, state) do
+    case find_npc_pid(target_id) do
+      nil ->
+        case Registry.lookup(L2E.Session.Registry, target_id) do
+          [{pid, _}] ->
+            GenServer.cast(pid, {:apply_dot, skill_id, level, damage_per_tick, tick_ms, ticks_left})
+
+          [] ->
+            :ok
+        end
+
+      npc_pid ->
+        L2E.NPC.Instance.apply_dot(npc_pid, skill_id, damage_per_tick, tick_ms, ticks_left)
+    end
+
+    _ = state
     :ok
   end
 
