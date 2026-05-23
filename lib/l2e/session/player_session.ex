@@ -147,8 +147,12 @@ defmodule L2E.Session.PlayerSession do
       pending_trade: nil,
       # Active enchant scroll object_id (nil if no enchant dialog open)
       enchant_scroll_id: nil,
-      # Current zone type at player's position (:normal | :peace | :pvp | :siege | :no_pvp | :other)
+      # Current zone type at player's position (:normal | :peace | :pvp | :siege | :no_pvp | :damage | :water | :swamp | :boss | :other)
       zone_type: :normal,
+      # M55-B: Zone damage tick timer ref
+      zone_damage_timer: nil,
+      # M55-B: Water/swim state
+      in_water: false,
       # PvP state
       pvp_flag: 0,
       karma: 0,
@@ -1357,6 +1361,34 @@ defmodule L2E.Session.PlayerSession do
     {:noreply, %{state | silenced: false, silence_timer: nil}}
   end
 
+  # M55-B: Zone damage tick
+  def handle_info({:zone_damage_tick, zone_type}, state) do
+    current_zone =
+      ZoneTable.zone_type_at(
+        elem(state.position, 0),
+        elem(state.position, 1),
+        elem(state.position, 2)
+      )
+
+    if current_zone == zone_type and state.hp > 0 do
+      damage = if zone_type == :damage, do: max(1, div(state.max_hp, 20)), else: max(1, div(state.max_hp, 50))
+      new_hp = max(0, state.hp - damage)
+      tick_ms = if zone_type == :damage, do: 2000, else: 4000
+      timer = Process.send_after(self(), {:zone_damage_tick, zone_type}, tick_ms)
+      state = %{state | hp: new_hp, zone_damage_timer: timer}
+
+      send(
+        state.conn_pid,
+        {:send_packet, Server.StatusUpdate.hp_mp(state.char_id, new_hp, state.mp)}
+      )
+
+      {:noreply, state}
+    else
+      # Player left zone — no more ticks
+      {:noreply, %{state | zone_damage_timer: nil}}
+    end
+  end
+
   def handle_info(msg, state) do
     Logger.debug("[PlayerSession] Unexpected message: #{inspect(msg)}")
     {:noreply, state}
@@ -1765,8 +1797,9 @@ defmodule L2E.Session.PlayerSession do
   end
 
   defp handle_packet(%L2E.Packet.Client.ValidatePosition{x: x, y: y, z: z, heading: h}, state) do
-    zone_type = ZoneTable.zone_type_at(x, y, z)
-    {:noreply, %{state | position: {x, y, z}, heading: h, zone_type: zone_type}}
+    new_zone = ZoneTable.zone_type_at(x, y, z)
+    state = handle_zone_change(state, new_zone)
+    {:noreply, %{state | position: {x, y, z}, heading: h}}
   end
 
   # ---- Action (0x04) — target selection or attack ------------------------
@@ -2463,6 +2496,12 @@ defmodule L2E.Session.PlayerSession do
 
   defp handle_packet(%L2E.Packet.Client.RequestGotoLobby{}, state), do: {:noreply, state}
 
+  # ---- RequestSSQStatus (0xC7) — M61-B: Seven Signs Quest status panel ----
+  # SSQStatus server packet not yet implemented; log and ignore until M61-C.
+  defp handle_packet(%L2E.Packet.Client.RequestSSQStatus{page: _page}, state) do
+    {:noreply, state}
+  end
+
   defp handle_packet(
          %L2E.Packet.Client.RequestBuyItem{npc_object_id: _npc_id, items: items},
          %{auth_state: :in_world} = state
@@ -3082,6 +3121,17 @@ defmodule L2E.Session.PlayerSession do
   end
 
   defp handle_packet(%L2E.Packet.Client.SetPrivateStoreMsgSell{}, state), do: {:noreply, state}
+
+  # M75-A: Buy store title message
+  defp handle_packet(
+         %L2E.Packet.Client.SetPrivateStoreMsgBuy{title: title},
+         %{auth_state: :in_world} = state
+       ) do
+    new_state = %{state | private_store_title: title || ""}
+    {:noreply, new_state}
+  end
+
+  defp handle_packet(%L2E.Packet.Client.SetPrivateStoreMsgBuy{}, state), do: {:noreply, state}
 
   defp handle_packet(
          %L2E.Packet.Client.RequestPrivateStoreBuy{seller_id: seller_id, items: req_items},
@@ -4883,5 +4933,38 @@ defmodule L2E.Session.PlayerSession do
         slot: slot
       })
     end)
+  end
+
+  # M55-B: Zone enter/exit event handler
+  defp handle_zone_change(%{zone_type: same} = state, same), do: state
+
+  defp handle_zone_change(state, new_zone) do
+    # Cancel existing damage tick timer if leaving a damage/swamp zone
+    state =
+      if state.zone_type in [:damage, :swamp] and new_zone not in [:damage, :swamp] do
+        if state.zone_damage_timer, do: Process.cancel_timer(state.zone_damage_timer)
+        %{state | zone_damage_timer: nil}
+      else
+        state
+      end
+
+    # Start damage tick if entering damage/swamp zone
+    state =
+      if new_zone in [:damage, :swamp] and state.zone_type not in [:damage, :swamp] do
+        tick_ms = if new_zone == :damage, do: 2000, else: 4000
+        timer = Process.send_after(self(), {:zone_damage_tick, new_zone}, tick_ms)
+        %{state | zone_damage_timer: timer}
+      else
+        state
+      end
+
+    # Broadcast zone change via PubSub for AOI system
+    Phoenix.PubSub.broadcast(
+      L2E.PubSub,
+      "player:#{state.char_id}",
+      {:zone_changed, state.zone_type, new_zone}
+    )
+
+    %{state | zone_type: new_zone, in_water: new_zone == :water}
   end
 end

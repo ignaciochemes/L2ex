@@ -27,8 +27,8 @@ defmodule L2E.Zone.ZoneTable do
 
   @zone_dir "L2J_Mobius_CT_0_Interlude/dist/game/data/zones"
 
-  # Zone types in priority order for conflict resolution
-  @priority [:peace, :no_pvp, :siege, :pvp, :other]
+  # Zone types in priority order for conflict resolution (most restrictive first)
+  @priority [:peace, :no_pvp, :siege, :boss, :pvp, :damage, :swamp, :water, :other]
 
   # ---------------------------------------------------------------------------
   # Public API

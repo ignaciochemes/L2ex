@@ -99,7 +99,9 @@ defmodule L2E.Packet.Decoder do
   def decode(0x90, body), do: Client.RequestPrivateStoreManageBuy.decode(body)
   def decode(0x91, body), do: Client.SetPrivateStoreListBuy.decode(body)
   def decode(0x96, body), do: Client.RequestPrivateStoreSell.decode(body)
-  def decode(0x8D, body), do: Client.RequestPrivateStoreQuitBuy.decode(body)
+  def decode(0x93, body), do: Client.RequestPrivateStoreQuitBuy.decode(body)
+  # M75-A: buy store title message
+  def decode(0x94, body), do: Client.SetPrivateStoreMsgBuy.decode(body)
 
   # M60: Session lifecycle
   def decode(0x09, body), do: Client.Logout.decode(body)
@@ -150,6 +152,9 @@ defmodule L2E.Packet.Decoder do
   # M72: Pet
   def decode(0x8A, body), do: Client.RequestPetUseItem.decode(body)
   def decode(0x8F, body), do: Client.RequestPetGetItem.decode(body)
+
+  # M61-B: Seven Signs Quest
+  def decode(0xC7, body), do: Client.RequestSSQStatus.decode(body)
 
   # ── Extended two-byte opcode space (0xD0 prefix) ────────────────────────────
   # Body starts with a little-endian 16-bit sub-opcode, then the real payload.

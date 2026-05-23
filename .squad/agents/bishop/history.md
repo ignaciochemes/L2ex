@@ -32,3 +32,23 @@ I handle endgame systems. Priority order:
 ## FASE 4 — Complete (2026-05-23)
 
 Commit 3c07e5f. Delivered M61-A (Grand Boss Manager, 9 bosses, ETS state machine, respawn timers) and M73-B (Day/Night Manager, 2h cycle, PubSub broadcast). Both modules wired into application.ex supervision tree. QA: 9/10 PASS.
+
+## FASE 5 — M61-B: Seven Signs System Foundation (2026-05-23)
+
+Delivered Seven Signs Quest (SSQ) foundation layer. Files created:
+- `priv/repo/migrations/20260523000002_create_seven_signs.exs` — two tables: `seven_signs_players` (per-character participation) and `seven_signs_state` (server-wide cycle/seal state)
+- `lib/l2e/db/seven_signs_player.ex` — Ecto schema with changeset validation
+- `lib/l2e/sevensigns/manager.ex` — GenServer state machine; configurable period timer (`ssq_period_ms`, default 1h); PubSub broadcasts on period change and cabal registration
+- `lib/l2e/sevensigns/supervisor.ex` — one_for_one Supervisor wrapping Manager
+- `lib/l2e/packet/client/packets.ex` — `RequestSSQStatus` struct (opcode 0xC7, 1-byte page)
+- `lib/l2e/packet/decoder.ex` — decoder entry for 0xC7
+- `lib/l2e/session/player_session.ex` — stub handler for RequestSSQStatus (SSQStatus server packet pending M61-C)
+- `lib/l2e/application.ex` — wired `L2E.SevenSigns.Supervisor` after DayNightManager
+
+Compile: clean (no new errors or warnings).
+
+Key lessons:
+- SSQ cabal registration in Interlude is bypass-driven (NPC dialog), NOT a dedicated client packet. `RequestSSQStatus` (0xC7) is the only SSQ client packet.
+- `award_seals/1` had a subtle bug in the original spec: after Seal Validation ends it was reading `state.current_cycle + 1` but at that point `state` had already been piped — fixed by binding `next_cycle = state.current_cycle + 1` before the struct update to avoid double-increment.
+- `update_stones/4` returns an updated struct; `add_score` cast must use `new_state.dawn_score`/`new_state.dusk_score` (not `state.*`) after stones update — fixed.
+- Migration uses `:bigint` for score fields (correct for Ecto + Postgres); `accumulated_adena` in the Ecto schema uses `:integer` (sufficient for Interlude adena caps).

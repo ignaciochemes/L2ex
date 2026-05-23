@@ -42,6 +42,16 @@
 
 ## Learnings
 
+### M55-B — Zone Effects & Events (2026-05-23)
+- Zone type parsing lives in `L2E.Zone.classify_type/1` (zone.ex), NOT in zone_table.ex — `to_zone/1` in zone_table.ex delegates to it. Extended there, not in zone_table.
+- `@priority` in zone_table.ex controls which zone type wins when a point is in multiple zones. Updated to `[:peace, :no_pvp, :siege, :boss, :pvp, :damage, :swamp, :water, :other]`.
+- `handle_zone_change/2` uses two-clause pattern match: first clause catches no-op (same zone), second handles real transitions. Avoids unnecessary PubSub broadcasts.
+- `StatusUpdate` struct uses `:object_id` and `:attributes` fields — NOT `:obj_id`/`:updates`. Use the `Server.StatusUpdate.hp_mp/3` helper function for HP-only updates, matching all other call sites in player_session.ex.
+- No `send_packet/2` helper exists in player_session.ex — always use `send(state.conn_pid, {:send_packet, pkt})`.
+- Zone damage timer cancellation on zone exit: guard `state.zone_type in [:damage, :swamp]` prevents calling `Process.cancel_timer(nil)` when entering from a non-damage zone.
+- `in_water` flag set inline in `handle_zone_change` return: `%{state | zone_type: new_zone, in_water: new_zone == :water}`.
+- Zero compile errors after all edits; only pre-existing warnings unrelated to M55-B.
+
 ### M49-B — Skill Effects Phase 2 (2026-05-23)
 - Added 10 new pure functions to `L2E.Skill.Effect`: `slow_factor/1`, `check_silence_lands?/2`, `apply_mana_burn/2`, `stat_modifier/3`, `apply_stat_mods/3`, `dot_tick_mp/2`, `apply_resurrection/2`, `cancel_count/1`.
 - New state fields in PlayerSession: `slowed`, `slow_timer`, `silenced`, `silence_timer`, `stat_mods` — added after `toggle_skills` in the initial state map.

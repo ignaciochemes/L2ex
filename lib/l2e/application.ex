@@ -54,6 +54,9 @@ defmodule L2E.Application do
       # M73-B: In-game day/night cycle broadcaster
       L2E.World.DayNightManager,
 
+      # M61-B: Seven Signs Quest state machine (period/cycle/seal tracking)
+      L2E.SevenSigns.Supervisor,
+
       # M50: Quest script registry — ETS-backed, must start before any player session
       L2E.Quest.Registry,
 

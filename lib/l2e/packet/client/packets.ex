@@ -1261,3 +1261,53 @@ defmodule L2E.Packet.Client.RequestGotoLobby do
   @impl L2E.Packet.Decodable
   def decode(_body), do: {:ok, %__MODULE__{}}
 end
+
+# M75-A: Private store — buy store title message
+# M61-B: Seven Signs Quest
+defmodule L2E.Packet.Client.RequestSSQStatus do
+  @moduledoc """
+  Opcode 0xC7 — client requests the Seven Signs Quest status panel.
+
+  Body: 1-byte page index.
+
+  Reference: ClientPackets.REQUEST_S_S_Q_STATUS(0xC7, RequestSSQStatus::new)
+  Java: readByte() -> _page
+  """
+  @behaviour L2E.Packet.Decodable
+
+  defstruct [:page]
+  @type t :: %__MODULE__{page: non_neg_integer()}
+
+  @impl L2E.Packet.Decodable
+  def decode(<<page::8, _rest::binary>>), do: {:ok, %__MODULE__{page: page}}
+  def decode(_), do: {:ok, %__MODULE__{page: 0}}
+end
+
+defmodule L2E.Packet.Client.SetPrivateStoreMsgBuy do
+  @moduledoc "0x94 — player sets the title message for their buy store."
+  @behaviour L2E.Packet.Decodable
+
+  defstruct [:title]
+  @type t :: %__MODULE__{}
+
+  @impl L2E.Packet.Decodable
+  def decode(body) do
+    case body do
+      <<>> ->
+        {:ok, %__MODULE__{title: ""}}
+
+      bin ->
+        title = decode_utf16_string(bin)
+        {:ok, %__MODULE__{title: title}}
+    end
+  end
+
+  defp decode_utf16_string(bin) do
+    chars = for <<a::8, b::8 <- bin>>, into: [], do: <<a::8, b::8>>
+
+    chars
+    |> Enum.take_while(&(&1 != <<0, 0>>))
+    |> Enum.map(fn <<a, b>> -> :unicode.characters_to_binary(<<a, b>>, {:utf16, :little}) end)
+    |> Enum.join()
+  end
+end

@@ -95,3 +95,23 @@
 ## FASE 4 — Complete (2026-05-23)
 
 Commit 3c07e5f. Delivered M74-A (macro system: migration, schema, 2 client packets, SendMacroList, EnterWorld load, CRUD handlers) and M73-A (4 alliance client packets, decoder entries, stub handlers). Corrected 6 opcodes from Java reference (`ClientPackets.java`). QA: PARTIAL on M73-A (opcode correction applied); all modules compile clean.
+
+## M75-A — Private Store System Gap-Fill (2026-05-23)
+
+Task audit found: the private store system was largely implemented in prior milestones (M35, M43) but had two gaps:
+
+**Gaps identified:**
+- `SetPrivateStoreMsgBuy` (0x94) — client packet module entirely missing from `client/packets.ex`; decoder entry missing; session handler missing.
+- `RequestPrivateStoreQuitBuy` decoder opcode was 0x8D but Java `ClientPackets.java` says 0x93.
+
+**Files modified:**
+- `lib/l2e/packet/client/packets.ex` — appended `SetPrivateStoreMsgBuy` module (same UTF-16LE decoder pattern as `SetPrivateStoreMsgSell`).
+- `lib/l2e/packet/decoder.ex` — fixed `RequestPrivateStoreQuitBuy` from 0x8D → 0x93; added `0x94 → SetPrivateStoreMsgBuy`.
+- `lib/l2e/session/player_session.ex` — added `SetPrivateStoreMsgBuy` handler setting `private_store_title` (same as sell variant).
+
+**No new server packets needed** — `PrivateStoreMsgBuy`, `PrivateStoreManageListBuy`, `PrivateStoreListBuy` already existed in `server/packets.ex`.
+
+**Learnings:**
+- Always audit ALL related opcodes in `ClientPackets.java` before declaring a feature "done" — the buy-side title message (0x94) was consistently skipped in earlier passes.
+- `RequestPrivateStoreQuitBuy` had wrong opcode because task spec gave approximate values; Java is canonical.
+- Compile passed with no new errors after changes.
