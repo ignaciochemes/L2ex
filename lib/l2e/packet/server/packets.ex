@@ -2854,3 +2854,32 @@ defmodule L2E.Packet.Server.ExOlympiadMode do
     <<0xFE::8, 0x2B::little-16, p.mode || 0::8>>
   end
 end
+
+defmodule L2E.Packet.Server.SendMacroList do
+  @moduledoc "0xCB — sends the character's macro list."
+  @opcode 0xCB
+
+  defstruct [:revision, :macros]
+
+  def encode(%__MODULE__{revision: rev, macros: macros}) when is_list(macros) do
+    count = length(macros)
+    macro_bin =
+      Enum.reduce(macros, <<>>, fn m, acc ->
+        name_b = encode_utf16le(Map.get(m, :name, "") || "")
+        descr_b = encode_utf16le(Map.get(m, :descr, "") || "")
+        key_b = encode_utf16le(Map.get(m, :keybind, "") || "")
+        icon = Map.get(m, :icon, 0) || 0
+        mid = Map.get(m, :macro_id, 0) || 0
+        acc <> <<mid::little-32>> <> name_b <> descr_b <> key_b <> <<icon::8, 0::8>>
+      end)
+
+    payload = <<rev::8, count::8>> <> macro_bin <> <<0::8>>
+    <<byte_size(payload) + 2::little-16, @opcode::8>> <> payload
+  end
+
+  defp encode_utf16le(str) do
+    chars = :unicode.characters_to_binary(str, :utf8, {:utf16, :little})
+    len = div(byte_size(chars), 2)
+    <<len::little-16>> <> chars
+  end
+end

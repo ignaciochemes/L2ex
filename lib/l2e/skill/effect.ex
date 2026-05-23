@@ -68,4 +68,74 @@ defmodule L2E.Skill.Effect do
     m_atk = Map.get(caster_stats, :m_atk, 10)
     max(1, round(power + m_atk * 0.05))
   end
+
+  # ── M49-B: Speed reduction ──────────────────────────────────────────────────
+
+  @doc "Returns speed multiplier for slow effect. power is percent reduction (e.g. 30 = 30% slower)."
+  def slow_factor(power), do: max(0.3, 1.0 - power / 100.0)
+
+  # ── M49-B: Silence landing check ────────────────────────────────────────────
+
+  @doc "Returns true if silence debuff lands. Same MEN-based formula as CC."
+  def check_silence_lands?(caster_stats, target_stats),
+    do: check_cc_lands?(caster_stats, target_stats)
+
+  # ── M49-B: Mana burn ────────────────────────────────────────────────────────
+
+  @doc "MP damage from mana burn skills (e.g. Mana Burn, Drain Mana)."
+  def apply_mana_burn(caster_stats, power) do
+    m_atk = Map.get(caster_stats, :m_atk, 10)
+    max(1, round(power * (1.0 + m_atk / 3000.0)))
+  end
+
+  # ── M49-B: Stat modifiers ───────────────────────────────────────────────────
+
+  @doc """
+  Applies a stat modifier entry.
+  type: :add or :percent
+  stat: atom key (:p_atk, :p_def, :m_atk, :m_def, :speed, :evasion_rate, :accuracy, :atk_spd, :cast_spd)
+  value: numeric modifier
+  Returns a modifier map to be merged into buff state.
+  """
+  def stat_modifier(stat, type, value) when type in [:add, :percent],
+    do: %{stat: stat, type: type, value: value}
+
+  @doc "Computes effective stat value after applying a list of modifiers."
+  def apply_stat_mods(base_value, mods, stat) do
+    relevant = Enum.filter(mods, &(&1.stat == stat))
+    adds = Enum.filter(relevant, &(&1.type == :add)) |> Enum.map(& &1.value) |> Enum.sum()
+    pcts = Enum.filter(relevant, &(&1.type == :percent)) |> Enum.map(& &1.value) |> Enum.sum()
+    round((base_value + adds) * (1.0 + pcts / 100.0))
+  end
+
+  # ── M49-B: MP DoT tick ──────────────────────────────────────────────────────
+
+  @doc "MP drain per tick (mana DoT skills)."
+  def dot_tick_mp(caster_stats, power) do
+    m_atk = Map.get(caster_stats, :m_atk, 10)
+    max(1, round(power + m_atk * 0.03))
+  end
+
+  # ── M49-B: Resurrection ─────────────────────────────────────────────────────
+
+  @doc """
+  Computes HP/MP granted by a resurrection effect.
+  power is percentage of max to restore (e.g. 70 = 70%).
+  Returns {hp_restore, mp_restore}.
+  """
+  def apply_resurrection(target_stats, power) do
+    max_hp = Map.get(target_stats, :max_hp, 100)
+    max_mp = Map.get(target_stats, :max_mp, 50)
+    pct = power / 100.0
+    {max(1, round(max_hp * pct)), max(1, round(max_mp * pct))}
+  end
+
+  # ── M49-B: Cancel / Dispel ──────────────────────────────────────────────────
+
+  @doc """
+  Determines how many buffs are removed by a cancel/dispel effect.
+  power is 1–5 representing max buffs to strip.
+  Returns integer count.
+  """
+  def cancel_count(power), do: max(1, min(5, div(power, 20)))
 end

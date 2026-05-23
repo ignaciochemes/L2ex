@@ -46,6 +46,7 @@ defmodule L2E.Session.PlayerSession do
   alias L2E.DB.CharacterQuest
   alias L2E.DB.CharacterShortcut
   alias L2E.DB.CharacterFriend
+  alias L2E.DB.CharacterMacro
   alias L2E.DB.CharacterSubclass
   alias L2E.Duel.Manager, as: DuelManager
   alias L2E.Olympiad.Manager, as: OlympiadManager
@@ -182,6 +183,14 @@ defmodule L2E.Session.PlayerSession do
       charge_count: 0,
       # M49: Active toggle skills — %{skill_id => timer_ref}
       toggle_skills: %{},
+      # M49-B: Speed debuff state
+      slowed: false,
+      slow_timer: nil,
+      # M49-B: Silence state
+      silenced: false,
+      silence_timer: nil,
+      # M49-B: Stat modifier buffs/debuffs (list of %{skill_id, stat, type, value, timer})
+      stat_mods: [],
       # M54: Shortcut bar — list of %{slot, page, type, shortcut_id, level}
       shortcuts: [],
       # M56: Henna/tattoo slots — %{1..3 => henna_id | nil}
@@ -191,6 +200,8 @@ defmodule L2E.Session.PlayerSession do
       is_sitting: false,
       # M66: Friend system
       friends_loaded: false,
+      # M74-A: Macros
+      macros: [],
       # M68: Sub-class system
       subclasses: [],
       active_subclass: nil,
@@ -1008,6 +1019,74 @@ defmodule L2E.Session.PlayerSession do
                 }
               end
 
+            :slow ->
+              caster_stats = player_combat_stats(state)
+              target_stats = get_target_stats(target_id, state)
+
+              if Effect.check_cc_lands?(caster_stats, target_stats) do
+                _factor = Effect.slow_factor(template.power)
+                timer = Process.send_after(self(), {:slow_expired}, template.buff_duration_ms)
+
+                %{
+                  state
+                  | mp: new_mp,
+                    cooldowns: new_cooldowns,
+                    casting: false,
+                    cast_timer: nil,
+                    slowed: true,
+                    slow_timer: timer
+                }
+              else
+                %{state | mp: new_mp, cooldowns: new_cooldowns, casting: false, cast_timer: nil}
+              end
+
+            :silence ->
+              caster_stats = player_combat_stats(state)
+              target_stats = get_target_stats(target_id, state)
+
+              if Effect.check_silence_lands?(caster_stats, target_stats) do
+                timer = Process.send_after(self(), {:silence_expired}, template.buff_duration_ms)
+
+                %{
+                  state
+                  | mp: new_mp,
+                    cooldowns: new_cooldowns,
+                    casting: false,
+                    cast_timer: nil,
+                    silenced: true,
+                    silence_timer: timer
+                }
+              else
+                %{state | mp: new_mp, cooldowns: new_cooldowns, casting: false, cast_timer: nil}
+              end
+
+            :mana_burn ->
+              caster_stats = player_combat_stats(state)
+              mp_damage = Effect.apply_mana_burn(caster_stats, template.power)
+              burned_mp = max(0.0, new_mp - mp_damage)
+
+              send(
+                state.conn_pid,
+                {:send_packet, Server.StatusUpdate.hp_mp(state.char_id, state.hp, burned_mp)}
+              )
+
+              %{state | mp: burned_mp, cooldowns: new_cooldowns, casting: false, cast_timer: nil}
+
+            :cancel ->
+              count = Effect.cancel_count(template.power)
+              new_buffs = state.buffs |> Enum.shuffle() |> Enum.drop(count)
+              abn_pkt = %Server.AbnormalStatusUpdate{effects: new_buffs}
+              send(state.conn_pid, {:send_packet, abn_pkt})
+
+              %{
+                state
+                | mp: new_mp,
+                  cooldowns: new_cooldowns,
+                  casting: false,
+                  cast_timer: nil,
+                  buffs: new_buffs
+              }
+
             _ ->
               %{state | mp: new_mp, cooldowns: new_cooldowns, casting: false, cast_timer: nil}
           end
@@ -1266,6 +1345,16 @@ defmodule L2E.Session.PlayerSession do
 
   def handle_info({:pet_despawned}, state) do
     {:noreply, %{state | pet_pid: nil, pet_item_obj_id: nil}}
+  end
+
+  # M49-B: Slow timer expired
+  def handle_info({:slow_expired}, state) do
+    {:noreply, %{state | slowed: false, slow_timer: nil}}
+  end
+
+  # M49-B: Silence timer expired
+  def handle_info({:silence_expired}, state) do
+    {:noreply, %{state | silenced: false, silence_timer: nil}}
   end
 
   def handle_info(msg, state) do
@@ -1629,6 +1718,12 @@ defmodule L2E.Session.PlayerSession do
     # M66: Send empty friend list on enter world (full load deferred)
     send(state.conn_pid, {:send_packet, %Server.FriendList{friends: []}})
 
+    # M74-A: Load macros
+    macros = L2E.Repo.all(
+      from(m in CharacterMacro, where: m.character_id == ^state.char_id, order_by: m.macro_id)
+    )
+    send(state.conn_pid, {:send_packet, %L2E.Packet.Server.SendMacroList{revision: 0, macros: macros}})
+
     Logger.info(
       "[PlayerSession] #{char_name} (id=#{char_id}) entered the world (class=#{state.class_id}, level=#{state.level})"
     )
@@ -1640,6 +1735,7 @@ defmodule L2E.Session.PlayerSession do
          skills: skills,
          quests: quests,
          shortcuts: shortcuts,
+         macros: macros,
          regen_timer: regen_timer,
          save_timer: save_timer
      }}
@@ -2218,6 +2314,11 @@ defmodule L2E.Session.PlayerSession do
   # M49: Block skill use when stunned
   defp handle_packet(%L2E.Packet.Client.RequestMagicSkillUse{}, %{cc_state: cc} = state)
        when is_map_key(cc, :stunned) do
+    {:noreply, state}
+  end
+
+  # M49-B: Block skill use when silenced
+  defp handle_packet(%L2E.Packet.Client.RequestMagicSkillUse{}, %{silenced: true} = state) do
     {:noreply, state}
   end
 
@@ -3529,6 +3630,58 @@ defmodule L2E.Session.PlayerSession do
         Logger.debug("[PlayerSession] SendFriendMsg: #{target_name} not online")
     end
 
+    {:noreply, state}
+  end
+
+  # ---- M74-A: Macro handlers --------------------------------------------------
+
+  defp handle_packet(%Client.RequestMakeMacro{} = pkt, state) do
+    attrs = %{
+      character_id: state.char_id,
+      macro_id: pkt.macro_id,
+      name: pkt.name,
+      descr: pkt.descr,
+      keybind: pkt.keybind,
+      icon: pkt.icon,
+      commands: pkt.commands
+    }
+    changeset = CharacterMacro.changeset(%CharacterMacro{}, attrs)
+    case L2E.Repo.insert(changeset,
+           on_conflict: {:replace, [:name, :descr, :keybind, :icon, :commands]},
+           conflict_target: [:character_id, :macro_id]) do
+      {:ok, macro} ->
+        new_macros = Enum.reject(state.macros, &(&1.macro_id == macro.macro_id)) ++ [macro]
+        send(state.conn_pid, {:send_packet, %L2E.Packet.Server.SendMacroList{revision: 1, macros: new_macros}})
+        {:noreply, %{state | macros: new_macros}}
+      {:error, _cs} ->
+        {:noreply, state}
+    end
+  end
+
+  defp handle_packet(%Client.RequestDeleteMacro{macro_id: mid}, state) do
+    L2E.Repo.delete_all(
+      from(m in CharacterMacro, where: m.character_id == ^state.char_id and m.macro_id == ^mid)
+    )
+    new_macros = Enum.reject(state.macros, &(&1.macro_id == mid))
+    send(state.conn_pid, {:send_packet, %L2E.Packet.Server.SendMacroList{revision: 1, macros: new_macros}})
+    {:noreply, %{state | macros: new_macros}}
+  end
+
+  # ---- M73-A: Alliance stubs --------------------------------------------------
+
+  defp handle_packet(%Client.RequestJoinAlly{}, state) do
+    {:noreply, state}
+  end
+
+  defp handle_packet(%Client.RequestAnswerJoinAlly{}, state) do
+    {:noreply, state}
+  end
+
+  defp handle_packet(%Client.RequestDismissAlly{}, state) do
+    {:noreply, state}
+  end
+
+  defp handle_packet(%Client.AllyLeave{}, state) do
     {:noreply, state}
   end
 

@@ -132,6 +132,13 @@ defmodule L2E.Packet.Decoder do
 
   # M66: Friend system
   def decode(0x5E, body), do: Client.RequestFriendInvite.decode(body)
+  # M74-A: Macro + Alliance
+  def decode(0xC1, body), do: Client.RequestMakeMacro.decode(body)
+  def decode(0xC2, body), do: Client.RequestDeleteMacro.decode(body)
+  def decode(0x82, body), do: Client.RequestJoinAlly.decode(body)
+  def decode(0x83, body), do: Client.RequestAnswerJoinAlly.decode(body)
+  def decode(0x86, body), do: Client.RequestDismissAlly.decode(body)
+  def decode(0x84, body), do: Client.AllyLeave.decode(body)
   def decode(0x5F, body), do: Client.RequestAnswerFriendInvite.decode(body)
   def decode(0x60, body), do: Client.RequestFriendList.decode(body)
   def decode(0x61, body), do: Client.RequestFriendDel.decode(body)
