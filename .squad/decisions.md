@@ -323,6 +323,77 @@ Existing `remove_item/3` takes instance_id; MultiSell needs template_id removal 
 
 ---
 
+---
+
+### [2026-05-23] M49-B Skill Effects Phase 2 (Dallas)
+
+**D1 — Effect module stays pure; no process calls**
+All new functions in `L2E.Skill.Effect` are stateless pure computations. No `GenServer.call`, no `send`, no side effects. Callers in `player_session.ex` are responsible for wiring results into state.
+
+**D2 — slow/silence applied to caster's own state (simplified MVP)**
+`:slow` and `:silence` effect handlers in `handle_info({:cast_complete, ...})` modify `state` (the casting player's session). In a future task, these should be sent to the target via `GenServer.cast(target_pid, {:apply_debuff, :slow, ...})` mirroring the `apply_cc_to_target/4` pattern used for `:stun` / `:root`.
+
+**D3 — `:mana_burn` uses `burned_mp` to avoid shadowing `new_mp`**
+The outer `case` scope binds `new_mp = max(0.0, state.mp - template.mp_cost)`. The `:mana_burn` branch computes `burned_mp = max(0.0, new_mp - mp_damage)` to apply the burn on top of the skill cost without rebinding `new_mp`.
+
+**D4 — `cancel_count/1` uses integer division over power/20**
+`cancel_count(power)` returns `max(1, min(5, div(power, 20)))`. Gives a 1–5 range for power 1–100+, matching L2J's cancel skill power scale without floating point.
+
+**D5 — Silence guard uses `%{silenced: true}` pattern match**
+Consistent with the existing stun guard. `silenced` is a boolean field, not a key presence check.
+
+---
+
+### [2026-05-23] M74-A Macro System + M73-A Alliance Packets (Lambert)
+
+**D1 — Opcode correction from Java reference (macro packets)**
+Task spec provided incorrect opcodes. Verified against `ClientPackets.java`:
+`RequestMakeMacro` → 0xC1 (not 0xA2), `RequestDeleteMacro` → 0xC2 (not 0x68).
+Wrong opcodes conflicted with existing `RequestPrivateStoreManageSell`/`SetPrivateStoreListSell` handlers.
+
+**D2 — Opcode correction from Java reference (alliance packets)**
+`RequestJoinAlly` → 0x82, `RequestAnswerJoinAlly` → 0x83, `AllyLeave` → 0x84, `RequestDismissAlly` → 0x86.
+Previous spec values (0x72–0x75) already used by `RequestCrystallizeItem`, private store packets.
+
+**D3 — `SendMacroList` (0xCB) self-contained with private `encode_utf16le/1`**
+No `@behaviour` dependency; private helper scoped to module. Alliance handlers are stubs (`{:noreply, state}`) — full alliance logic is a separate milestone.
+
+**D4 — `macros: []` loaded in EnterWorld from `CharacterMacro` DB schema**
+`import Ecto.Query` already at module level in `player_session.ex`; not duplicated in handler bodies.
+
+---
+
+### [2026-05-23] M61-A Grand Boss Manager + M73-B Day/Night Cycle (Bishop)
+
+**D1 — ETS-backed state with `:grand_boss_states` named table**
+`L2E.GrandBoss.Manager` owns a single ETS table `{boss_id, state, respawn_at}` with `:public, read_concurrency: true`. `get_state/1` is called from many player-facing paths — direct ETS reads avoid GenServer bottleneck. Writes are rare (boss death events).
+
+**D2 — Zaken ID is 29026, not 29022**
+L2J CT0: Antharas=29022, Zaken=29026. Task prompt had a duplicate-key map (Elixir would silently drop one). Corrected to unique keys — behavioral correctness constraint.
+
+**D3 — `set_dead/1` via `cast`; `set_alive/1` writes ETS directly**
+`set_dead` triggers timer scheduling and logging (side effects serialized via cast). `set_alive` is direct ETS insert; intentional for GM commands / respawn completion handlers.
+
+**D4 — Respawn window timer via `Process.send_after`**
+`{:respawn_window_open, boss_id}` fires after `min_h * 3_600_000 + rand(range_ms)`. Matches L2J behavior: server picks random time within window at death, not at respawn. Transitions: `:alive` → `:dead` → `:waiting` → `:alive`.
+
+**D5 — Day/Night Manager: plain GenServer, no Supervisor wrapper**
+`L2E.World.DayNightManager` has no children; Supervisor wrapper adds no value. Phase duration `@phase_duration_ms = 2 * 60 * 60 * 1000` (2h/phase, 4h full cycle). Broadcast on `"world:day_night"` topic. `current_phase/0` synchronous call preserved for request-time checks.
+
+---
+
+### [2026-05-23] Ripley — Gap Analysis Priority Update (2026-05-23)
+
+**Top 3 next milestones (post FASE 4):**
+
+| Priority | Milestone | Rationale |
+|----------|-----------|-----------|
+| 1 | M55 — Real Geodata | Stub poisons all combat/AI correctness; NPCs walk through walls; all call sites already designed (M46 interface ready) |
+| 2 | M49-B expansion | ~35 remaining EffectTypes block class differentiation, PvP quality, Olympiad |
+| 3 | M50-B Quest content | Quest DSL solid; 3/500+ scripts exist; new-player retention gap |
+
+---
+
 ## Governance
 
 - All meaningful changes require team consensus
