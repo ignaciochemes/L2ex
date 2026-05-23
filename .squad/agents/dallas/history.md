@@ -101,3 +101,5 @@
 ## FASE 4 — Complete (2026-05-23)
 
 Commit 3c07e5f. Delivered M49-B (Skill Effects Phase 2): 8 new pure functions in `effect.ex`, silence guard + expiry handlers in `player_session.ex`, new state fields `slowed`/`slow_timer`/`silenced`/`silence_timer`/`stat_mods`. QA: 9/10 PASS.
+
+## FASE 5 complete (2026-05-23)

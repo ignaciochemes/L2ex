@@ -394,6 +394,68 @@ L2J CT0: Antharas=29022, Zaken=29026. Task prompt had a duplicate-key map (Elixi
 
 ---
 
+---
+
+### [2026-05-23] M55-B Zone Effects & Events (Dallas)
+
+**D1 — classify_type/1 stays in zone.ex, not zone_table.ex**
+Zone type parsing already handled by `L2E.Zone.classify_type/1` called from `to_zone/1` in zone_table.ex. Extended in place; no duplication needed.
+
+**D2 — handle_zone_change first clause catches no-op via pattern match**
+`defp handle_zone_change(%{zone_type: same} = state, same), do: state` avoids PubSub noise on every ValidatePosition when zone has not changed.
+
+**D3 — Damage tick uses Server.StatusUpdate.hp_mp/3 helper**
+Consistent with all other HP update call sites in player_session.ex. No raw struct construction.
+
+**D4 — in_water set in handle_zone_change return, not a separate step**
+Single `%{state | zone_type: new_zone, in_water: new_zone == :water}` return keeps state mutations localized.
+
+**Files changed:** `lib/l2e/zone/zone.ex` (extended zone_type + classify_type/1), `lib/l2e/zone/zone_table.ex` (@priority updated), `lib/l2e/session/player_session.ex` (zone_damage_timer + in_water fields, handle_zone_change/2, zone_damage_tick handler).
+
+---
+
+### [2026-05-23] M75-A Private Store Gap-Fill (Lambert)
+
+**D1 — SetPrivateStoreMsgBuy uses same UTF-16LE decoder as SetPrivateStoreMsgSell**
+Both packets carry a UTF-16LE null-terminated store title string. `decode_utf16_string/1` duplicated in new module — consistent with sell variant and avoids cross-module coupling.
+
+**D2 — SetPrivateStoreMsgBuy handler sets private_store_title (shared field)**
+Session state uses a single `private_store_title` field for both buy and sell stores. A player can only have one active store at a time; `private_store_type` tracks which kind is active. No new state fields needed.
+
+**D3 — RequestPrivateStoreQuitBuy corrected to 0x93**
+Prior code used 0x8D (copy-paste error). `ClientPackets.java` is authoritative: `REQUEST_PRIVATE_STORE_QUIT_BUY(0x93)`. Correction applied in decoder.
+
+**D4 — No new server packets**
+`PrivateStoreMsgBuy`, `PrivateStoreManageListBuy`, and `PrivateStoreListBuy` already implemented from M43. All private store opcodes (0x73, 0x74, 0x76, 0x77, 0x79, 0x90, 0x91, 0x93, 0x94, 0x96) now correctly wired.
+
+**Files modified:** `lib/l2e/packet/client/packets.ex` (SetPrivateStoreMsgBuy module), `lib/l2e/packet/decoder.ex` (0x8D→0x93 fix, 0x94 added), `lib/l2e/session/player_session.ex` (SetPrivateStoreMsgBuy handler, 2 clauses).
+
+---
+
+### [2026-05-23] M61-B Seven Signs System Foundation (Bishop)
+
+**D1 — SSQ period duration is runtime-configurable**
+`Application.get_env(:l2e, :ssq_period_ms, 3_600_000)` — defaults to 1 hour for development testing. Production: 7 days (604_800_000 ms). Rejected: hardcoded constant.
+
+**D2 — Seal logic: winner takes all 3 seals**
+In `award_seals/1`, the cabal with higher total score wins all three seals (Avarice, Gnosis, Strife). Ties result in `:none` for all. Conservative correct MVP behavior matching L2J default; per-seal differentiation is a future enhancement.
+
+**D3 — update_stones/4 aggregates all stone types**
+Blue/green/red stones all add to `dawn_stones`/`dusk_stones` aggregate. Individual stone-type totals tracked per-player in DB (bluestone_count, greenstone_count, redstone_count) but not in Manager state. Seal award logic only needs total stones.
+
+**D4 — No dedicated cabal registration client packet**
+SSQ cabal registration in Interlude is NPC bypass-driven. `RequestSSQStatus` (0xC7) is the only SSQ client packet. `SSQStatus` server packet response deferred to M61-C. Stub handler in player_session.ex silently ignores 0xC7 for now.
+
+**D5 — SevenSigns.Manager uses defstruct (not plain map)**
+Pattern: `%{new_state | field: val}` — struct updates with `%{struct | ...}`. `add_score` cast binds `new_state` from `update_stones/4` before updating score field to avoid stale pre-update state.
+
+**D6 — DB schema created, not yet used by Manager**
+`seven_signs_state` table created for future persistence (crash recovery, server restarts). Manager boots with fresh in-memory state (period 1, cycle 1). DB persistence deferred to M61-C.
+
+**Files changed:** `priv/repo/migrations/20260523000002_create_seven_signs.exs` (new), `lib/l2e/db/seven_signs_player.ex` (new), `lib/l2e/sevensigns/manager.ex` (new), `lib/l2e/sevensigns/supervisor.ex` (new), `lib/l2e/packet/client/packets.ex` (RequestSSQStatus 0xC7), `lib/l2e/packet/decoder.ex` (0xC7 entry), `lib/l2e/session/player_session.ex` (stub handler), `lib/l2e/application.ex` (SevenSigns.Supervisor wired).
+
+---
+
 ## Governance
 
 - All meaningful changes require team consensus

@@ -115,3 +115,5 @@ Task audit found: the private store system was largely implemented in prior mile
 - Always audit ALL related opcodes in `ClientPackets.java` before declaring a feature "done" — the buy-side title message (0x94) was consistently skipped in earlier passes.
 - `RequestPrivateStoreQuitBuy` had wrong opcode because task spec gave approximate values; Java is canonical.
 - Compile passed with no new errors after changes.
+
+## FASE 5 complete (2026-05-23)

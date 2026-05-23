@@ -52,3 +52,5 @@ Key lessons:
 - `award_seals/1` had a subtle bug in the original spec: after Seal Validation ends it was reading `state.current_cycle + 1` but at that point `state` had already been piped — fixed by binding `next_cycle = state.current_cycle + 1` before the struct update to avoid double-increment.
 - `update_stones/4` returns an updated struct; `add_score` cast must use `new_state.dawn_score`/`new_state.dusk_score` (not `state.*`) after stones update — fixed.
 - Migration uses `:bigint` for score fields (correct for Ecto + Postgres); `accumulated_adena` in the Ecto schema uses `:integer` (sufficient for Interlude adena caps).
+
+## FASE 5 complete (2026-05-23)
