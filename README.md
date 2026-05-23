@@ -128,6 +128,9 @@ graph TB
         App --> OlySup[Olympiad.Supervisor]
         App --> PetSup[Pet.Supervisor<br/>DynamicSupervisor]
         App --> SiegeSup[Siege.Supervisor]
+        App --> GrandBossSup[GrandBoss.Supervisor<br/>DynamicSupervisor]
+        App --> DayNightMgr[World.DayNightManager<br/>GenServer]
+        App --> SevenSignsSup[SevenSigns.Supervisor]
     end
 ```
 
@@ -440,18 +443,28 @@ L2E:      1.0   2.0   3.9   7.8   15.4  (near-linear)
 | M70 – Olympiad foundation | `L2E.Olympiad.Manager` ETS GenServer (`register/3`, `unregister/1`, `get_points/1`, `add_points/2`, `active?/0`, `registration_list/0`); period timer via `Process.send_after`; `L2E.Olympiad.Supervisor`; `RequestOlympiadMatchList` client packet + `ExOlympiadMode` server packet |
 | M71 – Siege foundation | `L2E.Siege.Castle` struct with 9 Interlude castles; `L2E.Siege.Manager` ETS GenServer (`get_castle/1`, `register_attacker/3`, `register_defender/3`, `siege_active?/1`); `L2E.Siege.Supervisor`; `RequestSiegeInfo` (0x47) client packet + `SiegeInfo` (0xC9) server packet |
 | M72 – Pet system foundation | `L2E.Pet.Session` GenServer per pet (hunger timer, HP regen, follow AI via `handle_cast({:owner_moved, pos})`); `L2E.Pet.Supervisor` DynamicSupervisor; `RequestPetUseItem` (0x8A) + `RequestPetGetItem` (0x8F) client packets; `PetInfo` (0xB1) server packet; pet hunger/event `handle_info` callbacks in `PlayerSession` |
+| M49-B – Skill effects extended | `Skill.Effect` pure-computation additions: `slow_factor/1`, `check_silence_lands?/2`, `apply_mana_burn/2`, `stat_modifier/3`, `apply_stat_mods/3`, `dot_tick_mp/2`, `apply_resurrection/2`, `cancel_count/1`; `slowed/slow_timer`, `silenced/silence_timer`, `stat_mods` in `PlayerSession` state; silence guard blocks `RequestMagicSkillUse`; slow factor wired into movement speed |
+| M55-B – Zone effects | 4 new zone types (`:damage` / `:water` / `:swamp` / `:boss`) with `classify_type/1` mappings for 12 Java zone classes; `Zone.ZoneTable` priority updated; `handle_zone_change/2` in `PlayerSession` cancels/starts damage timers and broadcasts `{:zone_changed, old, new}` via PubSub; `handle_info({:zone_damage_tick, …})` applies 5% max HP per 2 s (damage zone) or 2% per 4 s (swamp); `in_water` flag for future swim logic |
+| M61-A – Grand Boss tracker | `L2E.GrandBoss.Manager` ETS-backed GenServer; 9 Interlude bosses (Antharas 29022, Valakas 29028, Baium 29020, Zaken 29026, Core 29006, Orfen 29014, Queen Ant 29001, Frintezza 29045, Sailren 29046); states `:alive / :dead / :waiting`; `set_dead/1` triggers randomised respawn window timer; `L2E.GrandBoss.Supervisor` under application tree |
+| M61-B – Seven Signs (SSQ) | `20260523000002_create_seven_signs` migration (`seven_signs_players` + `seven_signs_state` tables); `L2E.DB.SevenSignsPlayer` Ecto schema with cabal validation; `L2E.SevenSigns.Manager` GenServer with period 1 (Competition) / period 2 (Seal Validation) state machine; configurable period timer (`config :l2e, :ssq_period_ms`, default 1 h dev); `register_cabal/2`, `add_score/4`, `award_seals/1`, `get_seals/0`; PubSub broadcasts `{:ssq_period_changed, …}` and `{:ssq_cabal_registered, …}` on `"world:ssq"`; `RequestSSQStatus` (0xC7) client packet; `L2E.SevenSigns.Supervisor` under application tree |
+| M73-A – Alliance system | 6 client packets (`RequestJoinAlly` 0x82, `RequestAnswerJoinAlly` 0x83, `RequestDismissAlly` 0x84, `AllyLeave` 0x86); alliance join/invite/leave/dismiss handlers in `PlayerSession`; `AnnounceAllyInfo` broadcast on alliance change; Ecto query helpers on `Clan` schema for `ally_id` |
+| M73-B – Day/Night Cycle | `L2E.World.DayNightManager` GenServer; 2-hour per-phase timer via `Process.send_after/3`; phases `:day` / `:night`; `current_phase/0` public API; PubSub broadcasts `{:phase_changed, phase}` on `"world:day_night"`; `PlayerSession` subscribes on world entry and updates sky via `SunSet` / `SunRise` packets |
+| M74-A – Macros | `20260523000001_create_character_macros` migration; `L2E.DB.CharacterMacro` Ecto schema (icon, name, descr, keybind, commands); `RequestMakeMacro` (0xC1) / `RequestDeleteMacro` (0xC2) client packets; `macros` list in `PlayerSession` state loaded from DB on world entry; `SendMacroList` (0xCB) server packet with self-contained `encode_utf16le/1` |
+| M75-A – Private Store buy-side messages | `SetPrivateStoreMsgBuy` (0x94) server packet added; `RequestPrivateStoreQuitBuy` opcode corrected 0x8D → 0x93; all 10 private-store opcodes confirmed correctly decoded and routed in `PlayerSession` |
 
 ### Next
 
 | Milestone | Description |
 |-----------|-------------|
 | M55 – Real Geodata | Parse `.l2j` binary geodata files into ETS; NSWE passability bitmask checks; height map lookup; replace permissive stubs in `L2E.Geodata` with actual LOS and movement validation |
-| M61 – Grand Bosses | Boss spawn tables, respawn window tracking, epic jewelry drops, world-announce on death |
 | M68-B – Sub-class switching | `RequestSubclassInfo` / `RequestExSubclassInfoPacket`; `RequestSubclassChange` with level/exp swap; sub-class skill trees; DB persistence on switch |
 | M69-B – Duel full | Duel zone boundary enforcement; party duel support; winner determination on HP/surrender; PvP stat update |
 | M70-B – Olympiad matches | 1v1 arena instance lifecycle; match scheduler; score/points persistence to DB; `OlympiadInfo` / `OlympiadMatchList` server packets |
 | M71-B – Siege full | Siege scheduler with registration window; castle ownership transfer; siege zone enforcement; `SiegeClans` packet; attacker/defender NPC spawns |
 | M72-B – Pets full | `PetDataTable` ETS from XML; pet inventory; feed system; unsummon on owner death / logout; summoned pet NPC visible to region |
+| M73-C – Manor system | Castle manor management GenServer; seed/crop cycles; `RequestManorList` / `RequestSetSeedSow` / `RequestSetCropProcure` client packets |
+| M74-B – Fishing | Fishing zone detection (already flagged via `in_water`); `StartFishing` / `Fishing` / `StopFishing` server packets; skill `FISHING_COMMON` trigger |
+| M74-C – Skill enchant | `RequestExEnchantSkillInfo` / `RequestExEnchantSkill` client packets; SP + item cost validation; `enchant_level` field on `CharacterSkill` schema |
 
 ---
 
