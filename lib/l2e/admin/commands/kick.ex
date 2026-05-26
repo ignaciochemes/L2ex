@@ -7,9 +7,6 @@ defmodule L2E.Admin.Commands.Kick do
   Example: admin_kick BadPlayer — forces disconnection of the player
   """
 
-  require Logger
-  import Ecto.Query, only: [from: 2]
-
   alias L2E.Repo
   alias L2E.DB.Character
 

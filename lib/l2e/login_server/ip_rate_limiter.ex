@@ -78,7 +78,7 @@ defmodule L2E.LoginServer.IpRateLimiter do
         count = length(recent_timestamps)
 
         if count >= config.threshold do
-          Logger.warn("[IpRateLimiter] Rate limit exceeded for IP #{ip_str}: " <>
+          Logger.warning("[IpRateLimiter] Rate limit exceeded for IP #{ip_str}: " <>
             "#{count} requests in #{config.window_secs}s (threshold: #{config.threshold})")
           {:error, :rate_limit_exceeded}
         else

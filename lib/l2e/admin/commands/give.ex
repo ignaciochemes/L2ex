@@ -7,11 +7,6 @@ defmodule L2E.Admin.Commands.Give do
   Example: admin_give 1234 10 — grants 10 of item 1234
   """
 
-  require Logger
-  import Ecto.Query, only: [from: 2]
-
-  alias L2E.Repo
-  alias L2E.DB.Item
   alias L2E.Item.TemplateTable
 
   @doc """

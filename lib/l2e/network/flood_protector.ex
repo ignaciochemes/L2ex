@@ -69,7 +69,7 @@ defmodule L2E.Network.FloodProtector do
         "Flood detected on opcode #{format_opcode(opcode)}: " <>
           "#{count} packets in #{config.window_secs}s (threshold: #{config.threshold})"
 
-      Logger.warn("[FloodProtector] #{reason}")
+      Logger.warning("[FloodProtector] #{reason}")
       {:error, :flood_detected, reason}
     else
       # Add current timestamp and update state

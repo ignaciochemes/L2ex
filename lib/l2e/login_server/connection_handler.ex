@@ -218,7 +218,7 @@ defmodule L2E.LoginServer.ConnectionHandler do
         end
 
       {:error, :rate_limit_exceeded} ->
-        Logger.warn("[LoginServer] IP rate limit exceeded for #{inspect(state.client_ip)}")
+        Logger.warning("[LoginServer] IP rate limit exceeded for #{inspect(state.client_ip)}")
         fail = %LoginFail{reason: LoginFail.reason_access_failed()}
         send_raw(socket, Encoder.encode(fail))
         {:stop, state}
@@ -314,7 +314,7 @@ defmodule L2E.LoginServer.ConnectionHandler do
   # -----------------------------------------------------------------------
 
   defp get_client_ip(socket) do
-    case ThousandIsland.Socket.remote_address(socket) do
+    case :inet.peername(socket.socket) do
       {:ok, {ip, _port}} -> ip
       {:error, _} -> {0, 0, 0, 0}
     end

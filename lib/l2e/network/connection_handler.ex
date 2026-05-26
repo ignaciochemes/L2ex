@@ -179,7 +179,7 @@ defmodule L2E.Network.ConnectionHandler do
         end
 
       {:error, :flood_detected, reason} ->
-        Logger.warn("[ConnectionHandler] #{reason} — disconnecting")
+        Logger.warning("[ConnectionHandler] #{reason} — disconnecting")
         {:error, :flood_detected}
     end
   end
