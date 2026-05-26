@@ -38,7 +38,13 @@ defmodule L2E.NPC.Template do
     :attack_range,
     # Exp / SP reward on death
     :exp_reward,
-    :sp_reward
+    :sp_reward,
+    # Skill AI
+    skill_chance: 0.0,
+    skills: [],
+    # Movement AI
+    can_walk: false,
+    wander_radius: 0
   ]
 
   @type t :: %__MODULE__{}

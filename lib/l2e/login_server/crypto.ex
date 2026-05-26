@@ -21,9 +21,16 @@ defmodule L2E.LoginServer.Crypto do
 
   import Bitwise
 
+  alias L2E.Commons.Blowfish
+
   # Hardcoded in both client binary and LoginEncryption.java
   @static_bf_key <<0x6B, 0x60, 0xCB, 0x5B, 0x82, 0xCE, 0x90, 0xB1, 0xCC, 0x2B, 0x6C, 0x55, 0x6C,
                    0x6C, 0x6C, 0x6C>>
+
+  # Precompute the static-key Blowfish context at module load time (avoid recomputing
+  # per-connection). The session-key context is computed once per connection in the
+  # connection handler and passed here.
+  @static_bf_ctx Blowfish.init_key(@static_bf_key)
 
   @bf_block 8
   # Extra bytes for the static (XOR-pass) path (LoginEncryption.STATIC_HEADER_SIZE)
@@ -43,10 +50,10 @@ defmodule L2E.LoginServer.Crypto do
   The client ALWAYS encrypts with the session key (received from Init).
   Returns `{:ok, plaintext}` or `{:error, reason}`.
   """
-  @spec decrypt(binary(), session_key :: binary()) ::
+  @spec decrypt(binary(), bf_ctx :: {tuple(), tuple(), tuple(), tuple(), tuple()}) ::
           {:ok, binary()} | {:error, :bad_checksum | :size_error}
-  def decrypt(data, session_key) when rem(byte_size(data), @bf_block) == 0 do
-    plain = :crypto.crypto_one_time(:blowfish_ecb, session_key, data, false)
+  def decrypt(data, bf_ctx) when rem(byte_size(data), @bf_block) == 0 do
+    plain = Blowfish.decrypt_ecb(data, bf_ctx)
 
     if verify_checksum(plain) do
       {:ok, plain}
@@ -55,7 +62,7 @@ defmodule L2E.LoginServer.Crypto do
     end
   end
 
-  def decrypt(_data, _key), do: {:error, :size_error}
+  def decrypt(_data, _bf_ctx), do: {:error, :size_error}
 
   # -------------------------------------------------------------------
   # Encrypt (server → client)
@@ -73,7 +80,7 @@ defmodule L2E.LoginServer.Crypto do
     {buf, total} = pad_for_static(payload)
     xor_key = :rand.uniform(0x7FFFFFFF)
     buf = enc_xor_pass(buf, total, xor_key)
-    :crypto.crypto_one_time(:blowfish_ecb, @static_bf_key, buf, true)
+    Blowfish.encrypt_ecb(buf, @static_bf_ctx)
   end
 
   @doc """
@@ -81,11 +88,12 @@ defmodule L2E.LoginServer.Crypto do
 
   Appends a 4-byte checksum then Blowfish-ECB with the session key.
   """
-  @spec encrypt_session(binary(), session_key :: binary()) :: binary()
-  def encrypt_session(payload, session_key) do
+  @spec encrypt_session(binary(), bf_ctx :: {tuple(), tuple(), tuple(), tuple(), tuple()}) ::
+          binary()
+  def encrypt_session(payload, bf_ctx) do
     {buf, _total} = pad_for_session(payload)
     buf = append_checksum(buf)
-    :crypto.crypto_one_time(:blowfish_ecb, session_key, buf, true)
+    Blowfish.encrypt_ecb(buf, bf_ctx)
   end
 
   # -------------------------------------------------------------------

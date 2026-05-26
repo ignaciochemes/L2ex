@@ -7,6 +7,7 @@ defmodule L2E.Siege.Supervisor do
   @impl Supervisor
   def init(_) do
     children = [
+      L2E.Siege.GuardManager,
       L2E.Siege.Manager
     ]
 

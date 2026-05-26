@@ -24,11 +24,13 @@ defmodule L2E.LoginServer.ConnectionHandler do
   alias L2E.LoginServer.{Crypto, RsaKey, SessionKey, AccountStore, AuthService}
   alias L2E.LoginServer.Packet.{Decoder, Encoder}
   alias L2E.LoginServer.Packet.Client.{RequestAuthLogin, RequestServerList, RequestServerLogin}
+  alias L2E.LoginServer.Packet.Client.AuthGameGuard
 
   alias L2E.LoginServer.Packet.Server.{
     Init,
     LoginOk,
     LoginFail,
+    GGAuth,
     ServerList,
     PlayOk
   }
@@ -44,10 +46,12 @@ defmodule L2E.LoginServer.ConnectionHandler do
     {private_key, scrambled_modulus} = RsaKey.generate()
     session_bf_key = :crypto.strong_rand_bytes(16)
     session_id = :rand.uniform(0x7FFFFFFF)
+    bf_ctx = L2E.Commons.Blowfish.init_key(session_bf_key)
 
     state = %{
       rsa_private_key: private_key,
       session_bf_key: session_bf_key,
+      bf_ctx: bf_ctx,
       session_id: session_id,
       auth_state: :wait_auth,
       username: nil,
@@ -109,10 +113,13 @@ defmodule L2E.LoginServer.ConnectionHandler do
   # Packet dispatch
   # -----------------------------------------------------------------------
 
-  defp handle_packet(<<opcode::8, body::binary>>, socket, state) do
-    case Crypto.decrypt(body, state.session_bf_key) do
-      {:ok, plain} ->
+  defp handle_packet(payload, socket, state) do
+    case Crypto.decrypt(payload, state.bf_ctx) do
+      {:ok, <<opcode::8, plain::binary>>} ->
         dispatch(opcode, plain, socket, state)
+
+      {:ok, _} ->
+        {:continue, state}
 
       {:error, reason} ->
         Logger.warning("[LoginServer] Decrypt failed: #{reason}")
@@ -140,6 +147,13 @@ defmodule L2E.LoginServer.ConnectionHandler do
     end
   end
 
+  # --- AuthGameGuard (state :wait_auth) ------------------------------------
+
+  defp handle_decoded(%AuthGameGuard{session_id: sid}, socket, %{auth_state: :wait_auth} = state) do
+    send_encrypted_static(socket, Encoder.encode(%GGAuth{session_id: sid}))
+    {:continue, state}
+  end
+
   # --- RequestAuthLogin (state :wait_auth) ---------------------------------
 
   defp handle_decoded(%RequestAuthLogin{} = pkt, socket, %{auth_state: :wait_auth} = state) do
@@ -159,7 +173,7 @@ defmodule L2E.LoginServer.ConnectionHandler do
               login_ok2: session_key.login_ok2
             }
 
-            send_encrypted_static(socket, Encoder.encode(ok_packet))
+            send_encrypted_session(socket, Encoder.encode(ok_packet), state.bf_ctx)
 
             {:continue,
              %{
@@ -196,7 +210,7 @@ defmodule L2E.LoginServer.ConnectionHandler do
        ) do
     if SessionKey.check_login_pair(state.session_key, k1, k2) do
       list = %ServerList{}
-      send_encrypted_session(socket, Encoder.encode(list), state.session_bf_key)
+      send_encrypted_session(socket, Encoder.encode(list), state.bf_ctx)
       {:continue, state}
     else
       Logger.warning("[LoginServer] ServerList: invalid login pair from #{state.username}")
@@ -214,7 +228,7 @@ defmodule L2E.LoginServer.ConnectionHandler do
     if SessionKey.check_login_pair(state.session_key, k1, k2) do
       AccountStore.put(state.username, state.session_key)
       ok = %PlayOk{play_ok1: state.session_key.play_ok1, play_ok2: state.session_key.play_ok2}
-      send_encrypted_session(socket, Encoder.encode(ok), state.session_bf_key)
+      send_encrypted_session(socket, Encoder.encode(ok), state.bf_ctx)
       ThousandIsland.Socket.close(socket)
       {:stop, state}
     else
@@ -252,8 +266,8 @@ defmodule L2E.LoginServer.ConnectionHandler do
   end
 
   # Subsequent packets use SESSION Blowfish key
-  defp send_encrypted_session(socket, payload, session_bf_key) do
-    encrypted = Crypto.encrypt_session(payload, session_bf_key)
+  defp send_encrypted_session(socket, payload, bf_ctx) do
+    encrypted = Crypto.encrypt_session(payload, bf_ctx)
     frame(socket, encrypted)
   end
 

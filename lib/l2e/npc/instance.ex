@@ -54,7 +54,11 @@ defmodule L2E.NPC.Instance do
           target_id: pos_integer() | nil,
           region_pid: pid() | nil,
           attack_timer: reference() | nil,
-          leash_timer: reference() | nil
+          leash_timer: reference() | nil,
+          skill_chance: float(),
+          skills: list(),
+          wander_timer: reference() | nil,
+          wander_radius: non_neg_integer()
         }
 
   # -----------------------------------------------------------------------
@@ -128,8 +132,20 @@ defmodule L2E.NPC.Instance do
       attack_timer: nil,
       leash_timer: leash_timer,
       stunned: false,
-      stun_timer: nil
+      stun_timer: nil,
+      skill_chance: template.skill_chance || 0.15,
+      skills: template.skills || [],
+      wander_timer: nil,
+      wander_radius: template.wander_radius || 200
     }
+
+    state =
+      if template.can_walk do
+        timer = Process.send_after(self(), :wander_tick, :rand.uniform(10_000) + 5_000)
+        %{state | wander_timer: timer}
+      else
+        state
+      end
 
     Logger.debug(
       "[NPC.Instance] #{template.name} (id=#{object_id}) spawned at #{inspect(position)}"
@@ -389,8 +405,15 @@ defmodule L2E.NPC.Instance do
       # Arrived at spawn
       Logger.debug("[NPC.Instance] #{state.template.name} returned to spawn")
 
+      wander_timer =
+        if state.template.can_walk do
+          Process.send_after(self(), :wander_tick, :rand.uniform(10_000) + 5_000)
+        else
+          nil
+        end
+
       {:noreply,
-       %{state | position: state.spawn_pos, ai_state: :idle, hp: state.template.max_hp * 1.0}}
+       %{state | position: state.spawn_pos, ai_state: :idle, hp: state.template.max_hp * 1.0, wander_timer: wander_timer}}
     else
       # Step toward spawn (simplified: teleport at walk speed steps)
       step =
@@ -453,6 +476,34 @@ defmodule L2E.NPC.Instance do
 
   def handle_info({:dot_tick, _, _, _}, state), do: {:noreply, state}
 
+  # Wander AI — only moves in :idle state
+  def handle_info(:wander_tick, %{ai_state: :idle} = state) do
+    wander_radius = state.wander_radius
+    {sx, sy, sz} = state.spawn_pos
+    angle = :rand.uniform() * 2 * :math.pi()
+    dist = if wander_radius > 0, do: :rand.uniform(wander_radius), else: 0
+    nx = sx + round(:math.cos(angle) * dist)
+    ny = sy + round(:math.sin(angle) * dist)
+
+    move_pkt = %Server.CharMoveToLocation{
+      char_id: state.object_id,
+      x: nx,
+      y: ny,
+      z: sz,
+      origin_x: elem(state.position, 0),
+      origin_y: elem(state.position, 1),
+      origin_z: elem(state.position, 2)
+    }
+
+    broadcast_to_region(state, move_pkt)
+
+    next_ms = :rand.uniform(10_000) + 5_000
+    timer = Process.send_after(self(), :wander_tick, next_ms)
+    {:noreply, %{state | position: {nx, ny, sz}, wander_timer: timer}}
+  end
+
+  def handle_info(:wander_tick, state), do: {:noreply, state}
+
   def handle_info(msg, state) do
     Logger.debug("[NPC.Instance] Unexpected: #{inspect(msg)}")
     {:noreply, state}
@@ -464,14 +515,23 @@ defmodule L2E.NPC.Instance do
 
   defp enter_combat(state, target_pid) do
     cancel_timer(state.attack_timer)
+    cancel_timer(Map.get(state, :wander_timer))
     atk_ms = round(1000 / (state.template.atk_speed / 500.0))
     timer = Process.send_after(self(), :auto_attack_tick, atk_ms)
-    %{state | ai_state: :combat, target_pid: target_pid, attack_timer: timer}
+    %{state | ai_state: :combat, target_pid: target_pid, attack_timer: timer, wander_timer: nil}
   end
 
   defp drop_target(state) do
     cancel_timer(state.attack_timer)
-    %{state | hate_map: %{}, target_pid: nil, target_id: nil, ai_state: :idle, attack_timer: nil}
+
+    wander_timer =
+      if state.template.can_walk do
+        Process.send_after(self(), :wander_tick, :rand.uniform(10_000) + 5_000)
+      else
+        nil
+      end
+
+    %{state | hate_map: %{}, target_pid: nil, target_id: nil, ai_state: :idle, attack_timer: nil, wander_timer: wander_timer}
   end
 
   defp execute_attack(state) do
@@ -506,6 +566,9 @@ defmodule L2E.NPC.Instance do
 
         # Tell target to take damage
         GenServer.cast(state.target_pid, {:take_damage, damage, self()})
+
+        # Maybe cast a skill
+        state = maybe_cast_skill(state, target_id)
 
         # Schedule next attack
         atk_ms = round(1000 / (state.template.atk_speed / 500.0))
@@ -609,6 +672,107 @@ defmodule L2E.NPC.Instance do
 
   defp distance({x1, y1, _z1}, {x2, y2, _z2}) do
     :math.sqrt((x2 - x1) * (x2 - x1) + (y2 - y1) * (y2 - y1))
+  end
+
+  defp maybe_cast_skill(%{skills: []} = state, _target_id), do: state
+
+  defp maybe_cast_skill(state, target_id) do
+    if :rand.uniform() < state.skill_chance do
+      {skill_id, skill_template} = Enum.random(state.skills)
+      {x, y, z} = state.position
+
+      case skill_template.effect_type do
+        effect when effect in [:p_damage, :m_damage] ->
+          damage = round(skill_template.power)
+          GenServer.cast(state.target_pid, {:take_damage, damage, self()})
+
+          broadcast_to_region(state, %Server.MagicSkillUse{
+            caster_id: state.object_id,
+            target_id: target_id,
+            skill_id: skill_id,
+            skill_level: skill_template.level,
+            hit_time: skill_template.cast_time_ms,
+            reuse_delay: skill_template.reuse_ms,
+            x: x, y: y, z: z
+          })
+
+          broadcast_to_region(state, %Server.MagicSkillLaunched{
+            caster_id: state.object_id,
+            skill_id: skill_id,
+            skill_level: skill_template.level,
+            target_ids: [target_id]
+          })
+
+          state
+
+        :stun ->
+          GenServer.cast(state.target_pid, {:apply_cc, :stun, skill_template.buff_duration_ms})
+
+          broadcast_to_region(state, %Server.MagicSkillUse{
+            caster_id: state.object_id,
+            target_id: target_id,
+            skill_id: skill_id,
+            skill_level: skill_template.level,
+            hit_time: skill_template.cast_time_ms,
+            reuse_delay: skill_template.reuse_ms,
+            x: x, y: y, z: z
+          })
+
+          state
+
+        :root ->
+          GenServer.cast(state.target_pid, {:apply_cc, :rooted, skill_template.buff_duration_ms})
+
+          broadcast_to_region(state, %Server.MagicSkillUse{
+            caster_id: state.object_id,
+            target_id: target_id,
+            skill_id: skill_id,
+            skill_level: skill_template.level,
+            hit_time: skill_template.cast_time_ms,
+            reuse_delay: skill_template.reuse_ms,
+            x: x, y: y, z: z
+          })
+
+          state
+
+        :heal ->
+          new_hp = min(state.hp + skill_template.power, state.template.max_hp)
+          broadcast_to_region(state, Server.StatusUpdate.hp_mp(state.object_id, new_hp, 0))
+
+          broadcast_to_region(state, %Server.MagicSkillUse{
+            caster_id: state.object_id,
+            target_id: state.object_id,
+            skill_id: skill_id,
+            skill_level: skill_template.level,
+            hit_time: skill_template.cast_time_ms,
+            reuse_delay: skill_template.reuse_ms,
+            x: x, y: y, z: z
+          })
+
+          %{state | hp: new_hp}
+
+        :dot_hp ->
+          tick_dmg = round(skill_template.power / 5)
+          GenServer.cast(state.target_pid, {:apply_dot, skill_id, tick_dmg, 3_000, 5})
+
+          broadcast_to_region(state, %Server.MagicSkillUse{
+            caster_id: state.object_id,
+            target_id: target_id,
+            skill_id: skill_id,
+            skill_level: skill_template.level,
+            hit_time: skill_template.cast_time_ms,
+            reuse_delay: skill_template.reuse_ms,
+            x: x, y: y, z: z
+          })
+
+          state
+
+        _ ->
+          state
+      end
+    else
+      state
+    end
   end
 
   defp cancel_timer(nil), do: :ok

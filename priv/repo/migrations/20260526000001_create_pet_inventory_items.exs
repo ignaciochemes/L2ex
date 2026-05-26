@@ -3,13 +3,18 @@ defmodule L2E.Repo.Migrations.CreatePetInventoryItems do
 
   def change do
     create table(:pet_inventory_items) do
-      add(:pet_item_obj_id, :integer, null: false)  # the pet's collar item object id
-      add(:char_id, :integer, null: false)           # owner's character id
-      add(:item_id, :integer, null: false)           # item template id
-      add(:object_id, :integer, null: false)         # item object id
+      # the pet's collar item object id
+      add(:pet_item_obj_id, :integer, null: false)
+      # owner's character id
+      add(:char_id, :integer, null: false)
+      # item template id
+      add(:item_id, :integer, null: false)
+      # item object id
+      add(:object_id, :integer, null: false)
       add(:count, :integer, default: 1, null: false)
       add(:enchant_level, :integer, default: 0)
-      add(:slot, :integer, default: 0)               # paperdoll slot, 0 = not equipped
+      # paperdoll slot, 0 = not equipped
+      add(:slot, :integer, default: 0)
       timestamps()
     end
 

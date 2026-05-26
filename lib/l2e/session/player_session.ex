@@ -179,7 +179,7 @@ defmodule L2E.Session.PlayerSession do
       warehouse_context: :personal,
       # M47: Quest state map — %{quest_id => %{state: 0|1|2, cond: int, count: int, reward_taken: bool}}
       quests: %{},
-      # M49: Crowd-control flags — %{:stunned | :rooted => timer_ref}
+      # M49: Crowd-control flags — %{:stunned | :rooted | :sleeping | :paralyzed | :silenced => timer_ref}
       cc_state: %{},
       # M49: Active DoT timers — %{skill_id => timer_ref}
       dots: %{},
@@ -217,7 +217,11 @@ defmodule L2E.Session.PlayerSession do
       pet_item_obj_id: nil,
       # M70-B / M73: Olympiad match state
       olympiad_match_pid: nil,
-      olympiad_return_pos: nil
+      olympiad_return_pos: nil,
+      # M80: Pending dialog confirmation state — {:enchant_confirm, item_oid, scroll_oid} | nil
+      pending_dialog: nil,
+      # M81: Block list — MapSet of blocked player names
+      block_list: MapSet.new()
     }
 
     {:ok, state}
@@ -596,7 +600,8 @@ defmodule L2E.Session.PlayerSession do
   def handle_cast({:npc_killed_for_quest, _}, state), do: {:noreply, state}
 
   # M49: Apply crowd control to this player
-  def handle_cast({:apply_cc, cc_type, duration_ms}, state) when cc_type in [:stunned, :rooted] do
+  def handle_cast({:apply_cc, cc_type, duration_ms}, state)
+      when cc_type in [:stunned, :rooted, :sleeping, :paralyzed, :silenced] do
     if ref = Map.get(state.cc_state, cc_type), do: Process.cancel_timer(ref)
     timer = Process.send_after(self(), {:cc_expired, cc_type}, duration_ms)
     {:noreply, %{state | cc_state: Map.put(state.cc_state, cc_type, timer)}}
@@ -1405,45 +1410,61 @@ defmodule L2E.Session.PlayerSession do
   def handle_info({:olympiad_arena_teleport, x, y, z}, state) do
     new_pos = {x, y, z}
 
-    send(state.conn_pid, {:send_packet, %Server.TeleportToLocation{
-      object_id: state.char_id,
-      x: x,
-      y: y,
-      z: z
-    }})
+    send(
+      state.conn_pid,
+      {:send_packet,
+       %Server.TeleportToLocation{
+         object_id: state.char_id,
+         x: x,
+         y: y,
+         z: z
+       }}
+    )
 
     {:noreply, %{state | position: new_pos}}
   end
 
   def handle_info({:olympiad_match_result, :draw, _opponent_name, _points_delta}, state) do
-    send(state.conn_pid, {:send_packet, %Server.ExOlympiadMatchResult{
-      winner_char_id: 0,
-      winner_name: "",
-      loser_char_id: 0,
-      loser_name: ""
-    }})
+    send(
+      state.conn_pid,
+      {:send_packet,
+       %Server.ExOlympiadMatchResult{
+         winner_char_id: 0,
+         winner_name: "",
+         loser_char_id: 0,
+         loser_name: ""
+       }}
+    )
 
     {:noreply, state}
   end
 
   def handle_info({:olympiad_match_result, :win, opponent_name, _points_delta}, state) do
-    send(state.conn_pid, {:send_packet, %Server.ExOlympiadMatchResult{
-      winner_char_id: state.char_id,
-      winner_name: state.char_name,
-      loser_char_id: 0,
-      loser_name: opponent_name || ""
-    }})
+    send(
+      state.conn_pid,
+      {:send_packet,
+       %Server.ExOlympiadMatchResult{
+         winner_char_id: state.char_id,
+         winner_name: state.char_name,
+         loser_char_id: 0,
+         loser_name: opponent_name || ""
+       }}
+    )
 
     {:noreply, state}
   end
 
   def handle_info({:olympiad_match_result, :loss, opponent_name, _points_delta}, state) do
-    send(state.conn_pid, {:send_packet, %Server.ExOlympiadMatchResult{
-      winner_char_id: 0,
-      winner_name: opponent_name || "",
-      loser_char_id: state.char_id,
-      loser_name: state.char_name
-    }})
+    send(
+      state.conn_pid,
+      {:send_packet,
+       %Server.ExOlympiadMatchResult{
+         winner_char_id: 0,
+         winner_name: opponent_name || "",
+         loser_char_id: state.char_id,
+         loser_name: state.char_name
+       }}
+    )
 
     {:noreply, state}
   end
@@ -1452,12 +1473,16 @@ defmodule L2E.Session.PlayerSession do
     return_pos = state.olympiad_return_pos || {x, y, z}
     {rx, ry, rz} = return_pos
 
-    send(state.conn_pid, {:send_packet, %Server.TeleportToLocation{
-      object_id: state.char_id,
-      x: rx,
-      y: ry,
-      z: rz
-    }})
+    send(
+      state.conn_pid,
+      {:send_packet,
+       %Server.TeleportToLocation{
+         object_id: state.char_id,
+         x: rx,
+         y: ry,
+         z: rz
+       }}
+    )
 
     {:noreply, %{state | olympiad_match_pid: nil, olympiad_return_pos: nil, position: return_pos}}
   end
@@ -1860,9 +1885,10 @@ defmodule L2E.Session.PlayerSession do
 
   # ---- MoveToLocation (state :in_world) ----------------------------------
 
-  # M49: Block movement when stunned or rooted
+  # M49: Block movement when stunned, rooted, sleeping, or paralyzed
   defp handle_packet(%L2E.Packet.Client.MoveToLocation{}, %{cc_state: cc} = state)
-       when is_map_key(cc, :stunned) or is_map_key(cc, :rooted) do
+       when is_map_key(cc, :stunned) or is_map_key(cc, :rooted) or
+              is_map_key(cc, :sleeping) or is_map_key(cc, :paralyzed) do
     {:noreply, state}
   end
 
@@ -2001,9 +2027,10 @@ defmodule L2E.Session.PlayerSession do
 
   # ---- AttackRequest (0x0A) — direct attack ------------------------------
 
-  # M49: Block attacks when stunned
+  # M49: Block attacks when stunned, sleeping, or paralyzed
   defp handle_packet(%L2E.Packet.Client.AttackRequest{}, %{cc_state: cc} = state)
-       when is_map_key(cc, :stunned) do
+       when is_map_key(cc, :stunned) or is_map_key(cc, :sleeping) or
+              is_map_key(cc, :paralyzed) do
     {:noreply, state}
   end
 
@@ -2429,9 +2456,10 @@ defmodule L2E.Session.PlayerSession do
 
   # ---- RequestMagicSkillUse (0x2F) — player activates a skill ------------
 
-  # M49: Block skill use when stunned
+  # M49: Block skill use when stunned, sleeping, paralyzed, or silenced (cc)
   defp handle_packet(%L2E.Packet.Client.RequestMagicSkillUse{}, %{cc_state: cc} = state)
-       when is_map_key(cc, :stunned) do
+       when is_map_key(cc, :stunned) or is_map_key(cc, :sleeping) or
+              is_map_key(cc, :paralyzed) or is_map_key(cc, :silenced) do
     {:noreply, state}
   end
 
@@ -3845,10 +3873,14 @@ defmodule L2E.Session.PlayerSession do
         state.subclasses
       end
 
-    send(state.conn_pid, {:send_packet, %Server.ExSubclassInfo{
-      subclasses: subclasses,
-      active_index: state.active_subclass || 0
-    }})
+    send(
+      state.conn_pid,
+      {:send_packet,
+       %Server.ExSubclassInfo{
+         subclasses: subclasses,
+         active_index: state.active_subclass || 0
+       }}
+    )
 
     {:noreply, %{state | subclasses: subclasses}}
   end
@@ -3871,10 +3903,14 @@ defmodule L2E.Session.PlayerSession do
         end
       end
 
-      send(state.conn_pid, {:send_packet, %Server.ExSubclassInfo{
-        subclasses: state.subclasses,
-        active_index: class_index
-      }})
+      send(
+        state.conn_pid,
+        {:send_packet,
+         %Server.ExSubclassInfo{
+           subclasses: state.subclasses,
+           active_index: class_index
+         }}
+      )
 
       {:noreply, %{state | active_subclass: class_index, class_id: target.class_id}}
     else
@@ -3892,10 +3928,14 @@ defmodule L2E.Session.PlayerSession do
         {:ok, new_sub} ->
           updated_subs = state.subclasses ++ [new_sub]
 
-          send(state.conn_pid, {:send_packet, %Server.ExSubclassInfo{
-            subclasses: updated_subs,
-            active_index: state.active_subclass || 0
-          }})
+          send(
+            state.conn_pid,
+            {:send_packet,
+             %Server.ExSubclassInfo{
+               subclasses: updated_subs,
+               active_index: state.active_subclass || 0
+             }}
+          )
 
           {:noreply, %{state | subclasses: updated_subs}}
 

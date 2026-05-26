@@ -1,3 +1,23 @@
+defmodule L2E.LoginServer.Packet.Client.AuthGameGuard do
+  @moduledoc """
+  Opcode 0x07 — sent by the client immediately after receiving `Init`,
+  before `RequestAuthLogin`. Carries the session ID echoed from Init.
+  Server must respond with `GGAuth` (0x0B).
+  Reference: `AuthGameGuard.java`
+  """
+  @behaviour L2E.Packet.Decodable
+
+  defstruct [:session_id]
+  @type t :: %__MODULE__{}
+
+  @impl L2E.Packet.Decodable
+  def decode(<<session_id::little-32, _::binary>>) do
+    {:ok, %__MODULE__{session_id: session_id}}
+  end
+
+  def decode(_), do: {:error, :malformed}
+end
+
 defmodule L2E.LoginServer.Packet.Client.RequestAuthLogin do
   @moduledoc """
   First packet sent by the client after receiving `Init`.

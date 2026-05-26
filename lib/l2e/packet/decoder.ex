@@ -83,6 +83,8 @@ defmodule L2E.Packet.Decoder do
   def decode(0x58, body), do: Client.RequestEnchantItem.decode(body)
   # M33: Destroy item
   def decode(0x59, body), do: Client.RequestDestroyItem.decode(body)
+  # M80: Dialog answer
+  def decode(0x5C, body), do: Client.RequestDlgAnswer.decode(body)
 
   # M35: Private store — sell
   def decode(0x73, body), do: Client.RequestPrivateStoreManageSell.decode(body)
@@ -123,6 +125,8 @@ defmodule L2E.Packet.Decoder do
 
   # M64: MultiSell
   def decode(0x64, body), do: Client.MultiSellChoose.decode(body)
+  # M81: Block list
+  def decode(0x65, body), do: Client.RequestBlock.decode(body)
 
   # M45: Class advancement
   def decode(0xBA, body), do: Client.RequestGotoLobby.decode(body)

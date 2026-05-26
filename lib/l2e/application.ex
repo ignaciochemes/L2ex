@@ -37,6 +37,9 @@ defmodule L2E.Application do
       # M72-B: Pet template data
       L2E.Data.PetDataTable,
 
+      # GlobalVariables: server-wide persistent KV store — before any system that reads world state
+      L2E.World.GlobalVariables,
+
       # M69: Duel system
       {Registry, keys: :unique, name: L2E.Duel.Registry},
       L2E.Duel.Manager,
@@ -51,8 +54,14 @@ defmodule L2E.Application do
       # M71: Siege system
       L2E.Siege.Supervisor,
 
+      # M74: Castle door entities (DynamicSupervisor for door GenServers)
+      L2E.World.DoorSupervisor,
+
       # M61-A: Grand Boss respawn window tracking
       L2E.GrandBoss.Supervisor,
+
+      # RaidBossManager: respawn windows for regular raid-class bosses
+      L2E.NPC.RaidBossManager,
 
       # M73-B: In-game day/night cycle broadcaster
       L2E.World.DayNightManager,
@@ -62,9 +71,6 @@ defmodule L2E.Application do
 
       # M50: Quest script registry — ETS-backed, must start before any player session
       L2E.Quest.Registry,
-
-      # Geodata movement/LOS validation (stub until .geo files are loaded)
-      L2E.Geodata,
 
       # Instance zone infrastructure: supervisor first, then manager
       L2E.Instance.Supervisor,

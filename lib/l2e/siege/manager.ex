@@ -73,6 +73,16 @@ defmodule L2E.Siege.Manager do
     end
   end
 
+  @doc "Activate a siege for a castle: updates status and spawns guards."
+  def start_siege(castle_id) do
+    GenServer.call(__MODULE__, {:start_siege, castle_id})
+  end
+
+  @doc "End a siege for a castle: updates status and despawns guards."
+  def end_siege(castle_id) do
+    GenServer.call(__MODULE__, {:end_siege, castle_id})
+  end
+
   @impl GenServer
   def init(_) do
     :ets.new(@table, [:named_table, :public, read_concurrency: true])
@@ -114,6 +124,32 @@ defmodule L2E.Siege.Manager do
       entry = %{clan_id: clan_id, clan_name: clan_name}
       :ets.insert(@table, {{:defenders, castle_id}, [entry | current]})
       {:reply, :ok, state}
+    end
+  end
+
+  def handle_call({:start_siege, castle_id}, _from, state) do
+    case :ets.lookup(@table, {:castle, castle_id}) do
+      [{_, castle}] ->
+        :ets.insert(@table, {{:castle, castle_id}, %{castle | siege_status: :in_progress}})
+        L2E.Siege.GuardManager.spawn_guards(castle_id)
+        Logger.info("[Siege] Siege started for castle #{castle_id}")
+        {:reply, :ok, state}
+
+      [] ->
+        {:reply, {:error, :not_found}, state}
+    end
+  end
+
+  def handle_call({:end_siege, castle_id}, _from, state) do
+    case :ets.lookup(@table, {:castle, castle_id}) do
+      [{_, castle}] ->
+        :ets.insert(@table, {{:castle, castle_id}, %{castle | siege_status: :idle}})
+        L2E.Siege.GuardManager.despawn_guards(castle_id)
+        Logger.info("[Siege] Siege ended for castle #{castle_id}")
+        {:reply, :ok, state}
+
+      [] ->
+        {:reply, {:error, :not_found}, state}
     end
   end
 

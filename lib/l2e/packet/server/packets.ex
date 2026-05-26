@@ -2918,7 +2918,7 @@ defmodule L2E.Packet.Server.ExSubclassInfo do
     count = length(subclasses)
     subs_bin = encode_subclasses(subclasses)
 
-    <<0xFE::8, 0x0058::little-16, (active_index || 0)::little-32, count::little-32,
+    <<0xFE::8, 0x0058::little-16, active_index || 0::little-32, count::little-32,
       subs_bin::binary>>
   end
 
@@ -2966,9 +2966,9 @@ defmodule L2E.Packet.Server.ExOlympiadMatchResult do
     winner_name_bin = encode_utf16le(winner_name || "")
     loser_name_bin = encode_utf16le(loser_name || "")
 
-    <<0xFE::8, 0x0059::little-16, (winner_id || 0)::little-32>> <>
+    <<0xFE::8, 0x0059::little-16, winner_id || 0::little-32>> <>
       winner_name_bin <>
-      <<(loser_id || 0)::little-32>> <>
+      <<loser_id || 0::little-32>> <>
       loser_name_bin <>
       <<0::little-32>>
   end

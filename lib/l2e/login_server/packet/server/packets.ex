@@ -163,6 +163,22 @@ defmodule L2E.LoginServer.Packet.Server.ServerList do
   end
 end
 
+defmodule L2E.LoginServer.Packet.Server.GGAuth do
+  @moduledoc """
+  Opcode 0x0B — server response to the client's `AuthGameGuard` (0x07).
+  Echoes back the session ID. Encrypted with SESSION Blowfish key.
+  Reference: `GGAuth.java`
+  """
+  @behaviour L2E.Packet.Encodable
+
+  defstruct [:session_id]
+
+  @impl L2E.Packet.Encodable
+  def encode(%__MODULE__{session_id: sid}) do
+    <<0x0B, sid::little-32, 0::32, 0::32, 0::32, 0::32>>
+  end
+end
+
 defmodule L2E.LoginServer.Packet.Server.PlayOk do
   @moduledoc """
   Opcode 0x07 — grants access to the selected game server.

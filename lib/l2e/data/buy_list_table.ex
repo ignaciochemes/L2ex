@@ -130,26 +130,36 @@ defmodule L2E.Data.BuyListTable do
       npc_ids =
         doc
         |> xpath(~x"//npcs/npc"l)
-        |> Enum.map(fn node ->
-          node |> xpath(~x"./text()"s) |> String.trim() |> String.to_integer()
+        |> Enum.flat_map(fn node ->
+          text = node |> xpath(~x"./text()"s) |> String.trim()
+
+          case Integer.parse(text) do
+            {npc_id, _} -> [npc_id]
+            :error -> []
+          end
         end)
 
       items =
         doc
         |> xpath(
           ~x"//item"l,
-          item_id: ~x"./@id"i,
-          price: ~x"./@price"i,
-          count: ~x"./@count"i,
-          restock_delay: ~x"./@restock_delay"i
+          item_id: ~x"./@id"s,
+          price: ~x"./@price"s,
+          count: ~x"./@count"s,
+          restock_delay: ~x"./@restock_delay"s
         )
         |> Enum.map(fn raw ->
+          item_id = parse_attr_int(raw.item_id, 0)
+          price = parse_attr_int(raw.price, 0)
+          count = parse_attr_int(raw.count, 0)
+          restock_delay = parse_attr_int(raw.restock_delay, 0)
+
           %{
-            item_id: raw.item_id,
-            # -1 means unlimited
-            price: max(0, raw.price),
-            count: if(raw.count == 0, do: -1, else: raw.count),
-            restock_delay: raw.restock_delay
+            item_id: item_id,
+            price: max(0, price),
+            # 0 or missing → -1 (unlimited)
+            count: if(count == 0, do: -1, else: count),
+            restock_delay: restock_delay
           }
         end)
         |> Enum.filter(&(&1.item_id > 0))
@@ -161,4 +171,13 @@ defmodule L2E.Data.BuyListTable do
         {:error, :parse_error}
     end
   end
+
+  defp parse_attr_int(str, default) when is_binary(str) do
+    case Integer.parse(str) do
+      {val, _} -> val
+      :error -> default
+    end
+  end
+
+  defp parse_attr_int(_, default), do: default
 end

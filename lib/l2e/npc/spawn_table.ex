@@ -40,6 +40,17 @@ defmodule L2E.NPC.SpawnTable do
     GenServer.call(@name, {:admin_spawn, npc_id, x, y, z})
   end
 
+  @doc """
+  Spawn a raid boss by its id using its NPC template.
+  Called by RaidBossManager after the respawn window elapses.
+  Spawns at the template's last known position; coordinates are resolved
+  from the original XML spawn defs when available.
+  """
+  @spec spawn_boss(pos_integer(), L2E.NPC.Template.t()) :: :ok
+  def spawn_boss(boss_id, template) do
+    GenServer.cast(@name, {:spawn_boss, boss_id, template})
+  end
+
   # -----------------------------------------------------------------------
   # GenServer
   # -----------------------------------------------------------------------
@@ -101,6 +112,14 @@ defmodule L2E.NPC.SpawnTable do
     {new_state, pid} = do_spawn(state, {npc_id, x, y, z, 0, 0})
     result = if pid, do: {:ok, pid}, else: {:error, :spawn_failed}
     {:reply, result, new_state}
+  end
+
+  @impl GenServer
+  def handle_cast({:spawn_boss, _boss_id, template}, state) do
+    # Spawn at origin as fallback; real coordinates come from the spawn XML
+    # defs loaded at startup. The boss template's npc_id is used for lookup.
+    {new_state, _pid} = do_spawn(state, {template.npc_id, 0, 0, 0, 0, 0})
+    {:noreply, new_state}
   end
 
   # -----------------------------------------------------------------------

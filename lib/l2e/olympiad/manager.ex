@@ -171,12 +171,14 @@ defmodule L2E.Olympiad.Manager do
     Enum.each(matches, fn {p1, p2} ->
       L2E.Olympiad.Supervisor.start_match(%{
         match_id: System.unique_integer([:positive]),
-        player1:  p1,
-        player2:  p2
+        player1: p1,
+        player2: p2
       })
     end)
 
-    Logger.info("[Olympiad] Started #{length(matches)} matches from #{length(players)} registrants.")
+    Logger.info(
+      "[Olympiad] Started #{length(matches)} matches from #{length(players)} registrants."
+    )
 
     # Determine heroes (top-points player per class this period)
     heroes = determine_heroes(players)
@@ -201,7 +203,7 @@ defmodule L2E.Olympiad.Manager do
 
   defp pair_players(players) do
     players
-    |> Enum.filter(& &1.pid != nil)
+    |> Enum.filter(&(&1.pid != nil))
     |> Enum.shuffle()
     |> do_pair([])
   end

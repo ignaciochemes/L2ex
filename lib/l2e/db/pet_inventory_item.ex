@@ -16,7 +16,15 @@ defmodule L2E.DB.PetInventoryItem do
 
   def changeset(struct, params) do
     struct
-    |> cast(params, [:pet_item_obj_id, :char_id, :item_id, :object_id, :count, :enchant_level, :slot])
+    |> cast(params, [
+      :pet_item_obj_id,
+      :char_id,
+      :item_id,
+      :object_id,
+      :count,
+      :enchant_level,
+      :slot
+    ])
     |> validate_required([:pet_item_obj_id, :char_id, :item_id, :object_id])
   end
 
@@ -26,8 +34,13 @@ defmodule L2E.DB.PetInventoryItem do
 
   def add_item(pet_item_obj_id, char_id, item_id, object_id, count \\ 1) do
     %__MODULE__{}
-    |> changeset(%{pet_item_obj_id: pet_item_obj_id, char_id: char_id, item_id: item_id,
-                   object_id: object_id, count: count})
+    |> changeset(%{
+      pet_item_obj_id: pet_item_obj_id,
+      char_id: char_id,
+      item_id: item_id,
+      object_id: object_id,
+      count: count
+    })
     |> L2E.Repo.insert()
   end
 

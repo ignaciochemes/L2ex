@@ -15,17 +15,17 @@ defmodule L2E.Olympiad.Match do
   require Logger
 
   @arena_positions [
-    {186304, -87776, -3520},
-    {186344, -87448, -3520},
-    {186368, -87712, -3520}
+    {186_304, -87776, -3520},
+    {186_344, -87448, -3520},
+    {186_368, -87712, -3520}
   ]
-  @countdown_ms     10_000
+  @countdown_ms 10_000
   @match_timeout_ms 300_000
-  @return_delay_ms  5_000
+  @return_delay_ms 5_000
   @points_per_match 10
 
   # Default return point — Olympiad village (Goddard)
-  @default_return_pos {82696, 148032, -3469}
+  @default_return_pos {82696, 148_032, -3469}
 
   defstruct [
     :match_id,
@@ -54,8 +54,8 @@ defmodule L2E.Olympiad.Match do
   @impl GenServer
   def init(opts) do
     match_id = Map.get(opts, :match_id, System.unique_integer([:positive]))
-    player1  = Map.get(opts, :player1)
-    player2  = Map.get(opts, :player2)
+    player1 = Map.get(opts, :player1)
+    player2 = Map.get(opts, :player2)
 
     arena_pos = Enum.random(@arena_positions)
 
@@ -63,22 +63,29 @@ defmodule L2E.Olympiad.Match do
     ref2 = Process.monitor(player2.pid)
 
     # Notify players a match is starting (opponent info for UI)
-    send(player1.pid, {:olympiad_match_start, self(), Map.take(player2, [:char_id, :char_name, :class_id])})
-    send(player2.pid, {:olympiad_match_start, self(), Map.take(player1, [:char_id, :char_name, :class_id])})
+    send(
+      player1.pid,
+      {:olympiad_match_start, self(), Map.take(player2, [:char_id, :char_name, :class_id])}
+    )
+
+    send(
+      player2.pid,
+      {:olympiad_match_start, self(), Map.take(player1, [:char_id, :char_name, :class_id])}
+    )
 
     Process.send_after(self(), :match_start, @countdown_ms)
 
     Logger.info("[Olympiad.Match #{match_id}] #{player1.char_name} vs #{player2.char_name}")
 
     state = %__MODULE__{
-      match_id:    match_id,
-      player1:     player1,
-      player2:     player2,
-      arena_pos:   arena_pos,
-      status:      :countdown,
-      winner_id:   nil,
-      ref1:        ref1,
-      ref2:        ref2,
+      match_id: match_id,
+      player1: player1,
+      player2: player2,
+      arena_pos: arena_pos,
+      status: :countdown,
+      winner_id: nil,
+      ref1: ref1,
+      ref2: ref2,
       timeout_ref: nil
     }
 
@@ -101,7 +108,7 @@ defmodule L2E.Olympiad.Match do
       cond do
         ref == state.ref1 -> state.player1.char_id
         ref == state.ref2 -> state.player2.char_id
-        true              -> nil
+        true -> nil
       end
 
     if loser_id do
@@ -171,8 +178,8 @@ defmodule L2E.Olympiad.Match do
 
     L2E.Olympiad.Manager.record_result(winner.char_id, loser.char_id, @points_per_match)
 
-    send(winner.pid, {:olympiad_match_result, :win,  loser.char_name,  @points_per_match})
-    send(loser.pid,  {:olympiad_match_result, :loss, winner.char_name, @points_per_match})
+    send(winner.pid, {:olympiad_match_result, :win, loser.char_name, @points_per_match})
+    send(loser.pid, {:olympiad_match_result, :loss, winner.char_name, @points_per_match})
 
     Logger.info("[Olympiad.Match #{state.match_id}] Winner: #{winner.char_name}")
 

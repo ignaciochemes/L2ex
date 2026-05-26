@@ -18,11 +18,27 @@ defmodule L2E.DB.OlympiadHistory do
 
   def changeset(struct, params) do
     struct
-    |> cast(params, [:cycle, :winner_char_id, :winner_char_name, :winner_class_id,
-                     :loser_char_id, :loser_char_name, :loser_class_id, :points_delta,
-                     :match_duration_s])
-    |> validate_required([:cycle, :winner_char_id, :winner_char_name, :winner_class_id,
-                          :loser_char_id, :loser_char_name, :loser_class_id, :points_delta])
+    |> cast(params, [
+      :cycle,
+      :winner_char_id,
+      :winner_char_name,
+      :winner_class_id,
+      :loser_char_id,
+      :loser_char_name,
+      :loser_class_id,
+      :points_delta,
+      :match_duration_s
+    ])
+    |> validate_required([
+      :cycle,
+      :winner_char_id,
+      :winner_char_name,
+      :winner_class_id,
+      :loser_char_id,
+      :loser_char_name,
+      :loser_class_id,
+      :points_delta
+    ])
   end
 
   def insert(cycle, winner, loser, points_delta) do

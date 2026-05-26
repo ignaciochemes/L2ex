@@ -1311,3 +1311,31 @@ defmodule L2E.Packet.Client.SetPrivateStoreMsgBuy do
     |> Enum.join()
   end
 end
+
+defmodule L2E.Packet.Client.RequestDlgAnswer do
+  @moduledoc "0x5C — player answers a YES/NO confirmation dialog (1 = yes, 0 = no)."
+  @behaviour L2E.Packet.Decodable
+
+  defstruct [:answer]
+  @type t :: %__MODULE__{}
+
+  @impl L2E.Packet.Decodable
+  def decode(<<answer::little-32, _::binary>>), do: {:ok, %__MODULE__{answer: answer}}
+  def decode(_), do: {:error, :bad_packet}
+end
+
+defmodule L2E.Packet.Client.RequestBlock do
+  @moduledoc "0x65 — add or remove a player name from the block list (type: 1=add, 2=remove, 3=add+ignore-all)."
+  @behaviour L2E.Packet.Decodable
+
+  defstruct [:type, :name]
+  @type t :: %__MODULE__{}
+
+  @impl L2E.Packet.Decodable
+  def decode(<<type::little-32, rest::binary>>) do
+    name = rest |> :binary.bin_to_list() |> Enum.take_while(&(&1 != 0)) |> :binary.list_to_bin()
+    {:ok, %__MODULE__{type: type, name: name}}
+  end
+
+  def decode(_), do: {:error, :bad_packet}
+end
