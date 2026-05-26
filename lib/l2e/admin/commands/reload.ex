@@ -43,7 +43,10 @@ defmodule L2E.Admin.Commands.Reload do
   end
 
   defp do_reload(target) do
-    Logger.info("[Admin.Reload] Reload requested for '#{target}' — best-effort (no live reloader)")
+    Logger.info(
+      "[Admin.Reload] Reload requested for '#{target}' — best-effort (no live reloader)"
+    )
+
     {:ok, "#{String.capitalize(target)} reload acknowledged (best-effort)"}
   end
 end

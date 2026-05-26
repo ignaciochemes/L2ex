@@ -93,6 +93,28 @@ defmodule L2E.Party do
     GenServer.cast(party_pid, {:vital_update, char_id, hp, mp})
   end
 
+  @doc "Set party loot distribution mode. Only the leader can change it."
+  @spec set_loot_mode(pid(), atom(), pos_integer()) :: :ok | {:error, :not_leader | :invalid_mode}
+  def set_loot_mode(party_pid, mode, requester_char_id) do
+    GenServer.call(party_pid, {:set_loot_mode, mode, requester_char_id})
+  end
+
+  @doc "Return the current loot distribution mode atom."
+  @spec get_loot_mode(pid()) :: atom()
+  def get_loot_mode(party_pid) do
+    GenServer.call(party_pid, :get_loot_mode)
+  end
+
+  @doc "Return basic party info for Command Channel use."
+  @spec get_info(pid()) :: %{
+          leader_char_id: pos_integer(),
+          leader_name: String.t(),
+          member_count: non_neg_integer()
+        }
+  def get_info(party_pid) do
+    GenServer.call(party_pid, :get_info)
+  end
+
   # -----------------------------------------------------------------------
   # GenServer callbacks
   # -----------------------------------------------------------------------
@@ -112,6 +134,7 @@ defmodule L2E.Party do
     state = %{
       leader_id: leader_id,
       distribution_type: dist,
+      loot_mode: :finders_keepers,
       # %{char_id => member()}
       members: %{},
       # %{char_id => {pid, timer_ref}}
@@ -122,6 +145,50 @@ defmodule L2E.Party do
 
     Logger.info("[Party] Created by leader=#{leader_id}")
     {:ok, state}
+  end
+
+  # ── Loot mode ────────────────────────────────────────────────────────────────
+
+  @valid_loot_modes [
+    :finders_keepers,
+    :random_including_spoil,
+    :by_turn,
+    :by_turn_including_spoil,
+    :random
+  ]
+
+  @impl true
+  def handle_call({:set_loot_mode, mode, requester_char_id}, _from, state) do
+    cond do
+      requester_char_id != state.leader_id ->
+        {:reply, {:error, :not_leader}, state}
+
+      mode not in @valid_loot_modes ->
+        {:reply, {:error, :invalid_mode}, state}
+
+      true ->
+        {:reply, :ok, %{state | loot_mode: mode}}
+    end
+  end
+
+  def handle_call(:get_loot_mode, _from, state) do
+    {:reply, state.loot_mode, state}
+  end
+
+  def handle_call(:get_info, _from, state) do
+    leader_name =
+      case Map.get(state.members, state.leader_id) do
+        nil -> "Unknown"
+        m -> Map.get(m, :char_name, "Unknown")
+      end
+
+    info = %{
+      leader_char_id: state.leader_id,
+      leader_name: leader_name,
+      member_count: map_size(state.members)
+    }
+
+    {:reply, info, state}
   end
 
   # ── Invite ───────────────────────────────────────────────────────────────────

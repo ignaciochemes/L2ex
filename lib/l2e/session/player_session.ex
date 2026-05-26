@@ -229,7 +229,12 @@ defmodule L2E.Session.PlayerSession do
       # M81: Block list — MapSet of blocked player names
       block_list: MapSet.new(),
       # M76: Hero status
-      is_hero: false
+      is_hero: false,
+      # M83: Command Channel id (nil if not in a CC)
+      cc_id: nil,
+      # M86: Fishing state
+      fishing: false,
+      fishing_pid: nil
     }
 
     {:ok, state}
@@ -282,13 +287,18 @@ defmodule L2E.Session.PlayerSession do
 
     # Broadcast HP update to both duel participants
     if state.active_duel_id do
-      Phoenix.PubSub.broadcast(L2E.PubSub, "duel:#{state.active_duel_id}", {:duel_hp_update, %{
-        char_name: state.char_name,
-        hp: new_hp,
-        max_hp: state.max_hp,
-        cp: state.cp,
-        max_cp: state.max_cp
-      }})
+      Phoenix.PubSub.broadcast(
+        L2E.PubSub,
+        "duel:#{state.active_duel_id}",
+        {:duel_hp_update,
+         %{
+           char_name: state.char_name,
+           hp: new_hp,
+           max_hp: state.max_hp,
+           cp: state.cp,
+           max_cp: state.max_cp
+         }}
+      )
     end
 
     # Flag attacker if they are another player
@@ -514,6 +524,10 @@ defmodule L2E.Session.PlayerSession do
         from(c in Character, where: c.id == ^db_id),
         set: [exp: new_exp, sp: new_sp, level: new_level]
       )
+    end
+
+    if state.pet_pid do
+      GenServer.cast(state.pet_pid, {:gain_exp, div(exp, 4)})
     end
 
     {:noreply, final_state}
@@ -1142,7 +1156,10 @@ defmodule L2E.Session.PlayerSession do
             :hp_drain ->
               caster_stats = player_combat_stats(state)
               target_stats = get_target_stats(target_id, state)
-              %{damage: dmg, healed: healed} = Effect.apply_hp_drain(caster_stats, target_stats, template.power)
+
+              %{damage: dmg, healed: healed} =
+                Effect.apply_hp_drain(caster_stats, target_stats, template.power)
+
               deal_damage_to_target(target_id, dmg, state)
               new_hp = min(state.max_hp, state.hp + healed)
 
@@ -1151,7 +1168,14 @@ defmodule L2E.Session.PlayerSession do
                 {:send_packet, Server.StatusUpdate.hp_mp(state.char_id, new_hp, new_mp)}
               )
 
-              %{state | hp: new_hp, mp: new_mp, cooldowns: new_cooldowns, casting: false, cast_timer: nil}
+              %{
+                state
+                | hp: new_hp,
+                  mp: new_mp,
+                  cooldowns: new_cooldowns,
+                  casting: false,
+                  cast_timer: nil
+              }
 
             # M80: Fear — CC that sends apply_fear to target (NPC or player)
             :fear ->
@@ -1181,7 +1205,9 @@ defmodule L2E.Session.PlayerSession do
               target_stats = get_target_stats(target_id, state)
 
               if Effect.check_cc_lands?(caster_stats, target_stats) do
-                duration = Effect.paralyze_duration(target_stats, template.buff_duration_ms || 8_000)
+                duration =
+                  Effect.paralyze_duration(target_stats, template.buff_duration_ms || 8_000)
+
                 apply_cc_to_target(target_id, :paralyzed, duration, state)
               end
 
@@ -1250,7 +1276,13 @@ defmodule L2E.Session.PlayerSession do
             :fake_death ->
               if Effect.fake_death_lands?() do
                 if state.fake_death_timer, do: Process.cancel_timer(state.fake_death_timer)
-                timer = Process.send_after(self(), :fake_death_expired, template.buff_duration_ms || 60_000)
+
+                timer =
+                  Process.send_after(
+                    self(),
+                    :fake_death_expired,
+                    template.buff_duration_ms || 60_000
+                  )
 
                 %{
                   state
@@ -1523,13 +1555,18 @@ defmodule L2E.Session.PlayerSession do
   end
 
   def handle_info({:duel_hp_update, data}, state) do
-    send(state.conn_pid, {:send_packet, %Server.ExDuelUpdateUserInfo{
-      char_name: data.char_name,
-      hp: data.hp,
-      max_hp: data.max_hp,
-      cp: data.cp,
-      max_cp: data.max_cp
-    }})
+    send(
+      state.conn_pid,
+      {:send_packet,
+       %Server.ExDuelUpdateUserInfo{
+         char_name: data.char_name,
+         hp: data.hp,
+         max_hp: data.max_hp,
+         cp: data.cp,
+         max_cp: data.max_cp
+       }}
+    )
+
     {:noreply, state}
   end
 
@@ -1698,12 +1735,91 @@ defmodule L2E.Session.PlayerSession do
     {:noreply, %{state | pet_pid: nil, pet_item_obj_id: nil}}
   end
 
+  def handle_info({:pet_exp_updated, _exp, _level}, state) do
+    # Could send PetStatusUpdate here — for now, just accept the message
+    {:noreply, state}
+  end
+
+  def handle_info({:pet_level_up, level}, state) do
+    # Notify player of pet level up
+    _ = level
+    {:noreply, state}
+  end
+
   # ---- M76: Hero election broadcast ------------------------------------------
 
   def handle_info({:heroes_elected, heroes}, state) do
     is_hero = Enum.any?(heroes, fn h -> h.char_id == state.char_id end)
     send(state.conn_pid, {:send_packet, %L2E.Packet.Server.ExHeroList{heroes: heroes}})
     {:noreply, %{state | is_hero: is_hero}}
+  end
+
+  # M83: Command Channel update notification
+  def handle_info({:cc_updated, _cc_info}, state) do
+    # CC UI refresh — individual packet sends wired per-feature later
+    {:noreply, state}
+  end
+
+  # ---- M86: Fishing messages from FishingSession ----------------------------
+
+  def handle_info({:fishing_started, x, y, z}, state) do
+    send(
+      state.conn_pid,
+      {:send_packet,
+       %Server.ExFishingStart{
+         char_id: state.char_id,
+         x: x,
+         y: y,
+         z: z
+       }}
+    )
+
+    {:noreply, state}
+  end
+
+  def handle_info({:fish_bit, _fish_id}, state) do
+    # Show fish HP bar at 100/100 to signal a bite
+    send(
+      state.conn_pid,
+      {:send_packet,
+       %Server.ExFishingHpRegen{
+         char_id: state.char_id,
+         fish_hp: 100,
+         fish_max_hp: 100
+       }}
+    )
+
+    {:noreply, state}
+  end
+
+  def handle_info({:fishing_reel_hp, hp}, state) do
+    send(
+      state.conn_pid,
+      {:send_packet,
+       %Server.ExFishingHpRegen{
+         char_id: state.char_id,
+         fish_hp: hp,
+         fish_max_hp: 100
+       }}
+    )
+
+    {:noreply, state}
+  end
+
+  def handle_info({:fishing_stopped, result}, state) do
+    win = if result == :escaped or result == :cancelled, do: 0, else: 1
+    send(state.conn_pid, {:send_packet, %Server.ExFishingEnd{char_id: state.char_id, win: win}})
+
+    # Award fish item if caught
+    case result do
+      {:caught, fish_id} ->
+        Inventory.add_item(state.char_id, fish_id, 1)
+
+      _ ->
+        :ok
+    end
+
+    {:noreply, %{state | fishing: false, fishing_pid: nil}}
   end
 
   def handle_info(msg, state) do
@@ -1741,6 +1857,11 @@ defmodule L2E.Session.PlayerSession do
   # M43: Anyone can call this to read the buy store list + owner char_id
   def handle_call(:get_buy_store_list, _from, state) do
     {:reply, {state.char_id, state.buy_store_list}, state}
+  end
+
+  # M84: Return the current clan process pid for this player
+  def handle_call(:get_clan_pid, _from, state) do
+    {:reply, state.clan_pid, state}
   end
 
   # M47: Retrieve current quest state for a quest_id
@@ -3265,6 +3386,40 @@ defmodule L2E.Session.PlayerSession do
 
   defp handle_packet(%L2E.Packet.Client.RequestOustPartyMember{}, state), do: {:noreply, state}
 
+  # ---- M82: Party loot mode change ---------------------------------------
+
+  defp handle_packet(
+         %L2E.Packet.Client.RequestPartyLootModify{loot_type: mode},
+         %{auth_state: :in_world} = state
+       ) do
+    if state.party_pid do
+      case Party.set_loot_mode(state.party_pid, mode, state.char_id) do
+        :ok ->
+          send(
+            state.conn_pid,
+            {:send_packet,
+             %Server.SystemMessage{message_id: Server.SystemMessage.msg_loot_mode_changed()}}
+          )
+
+        {:error, :not_leader} ->
+          send(
+            state.conn_pid,
+            {:send_packet,
+             %Server.SystemMessage{
+               message_id: Server.SystemMessage.msg_only_leader_can_change_loot()
+             }}
+          )
+
+        _ ->
+          :ok
+      end
+    end
+
+    {:noreply, state}
+  end
+
+  defp handle_packet(%L2E.Packet.Client.RequestPartyLootModify{}, state), do: {:noreply, state}
+
   # ---- M22: Clan requests ------------------------------------------------
 
   defp handle_packet(
@@ -4347,6 +4502,25 @@ defmodule L2E.Session.PlayerSession do
     end
   end
 
+  # ---- M86: RequestFishing (0x89) — start or stop fishing ------------------
+
+  defp handle_packet(%Client.RequestFishing{x: x, y: y, z: z}, %{auth_state: :in_world} = state) do
+    if state.fishing do
+      # Toggle off — stop fishing
+      if state.fishing_pid, do: L2E.Fishing.Session.stop_fishing(state.fishing_pid)
+      {:noreply, %{state | fishing: false, fishing_pid: nil}}
+    else
+      # Toggle on — start fishing
+      {:ok, fishing_pid} =
+        L2E.Fishing.Session.start_link(owner_pid: self(), char_id: state.char_id)
+
+      L2E.Fishing.Session.start_fishing(fishing_pid, x, y, z)
+      {:noreply, %{state | fishing: true, fishing_pid: fishing_pid}}
+    end
+  end
+
+  defp handle_packet(%Client.RequestFishing{}, state), do: {:noreply, state}
+
   defp handle_packet(packet, state) do
     Logger.debug("[PlayerSession] Unhandled packet: #{inspect(packet.__struct__)}")
     {:noreply, state}
@@ -4476,6 +4650,7 @@ defmodule L2E.Session.PlayerSession do
 
     if npc_pid = find_npc_pid(state.target_id) do
       L2E.NPC.Instance.add_hate(npc_pid, self(), 1)
+      if state.pet_pid, do: GenServer.cast(state.pet_pid, {:attack_target, npc_pid})
     end
 
     timer = schedule_attack(state)

@@ -1,3 +1,5 @@
+[![Discord](https://img.shields.io/discord/x66PaqWsru?label=Discord&logo=discord&logoColor=white&color=5865F2)](https://discord.gg/x66PaqWsru)
+
 # L2E — Lineage II Elixir Server
 
 > A from-scratch reimplementation of a **Lineage II: Interlude** game server, built with idiomatic **Elixir/OTP** — not a Java port.

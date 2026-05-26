@@ -658,6 +658,14 @@ defmodule L2E.NPC.Instance do
     broadcast_to_region(state, die_packet)
 
     # M18: Drop items as ground items in the region (visible to all players)
+    # M82 TODO: Loot distribution — when the killer has a party with a non-:finders_keepers
+    # loot_mode, distribute drops to the appropriate party member instead of (or in addition to)
+    # dropping on the ground. Requires:
+    #   1. `handle_call(:get_party_pid, _from, state)` on PlayerSession returning state.party_pid
+    #   2. `L2E.Party.get_loot_mode(party_pid)` to read the mode
+    #   3. For :random — pick a random member pid from the party and send the item directly
+    #   4. For :by_turn — read/advance `next_looter_index` in party state via a new handle_call
+    # For now all drops fall through to the region as ground items (:finders_keepers behavior).
     drops = DropResolver.resolve(state.template)
 
     unless drops == [] or is_nil(state.region_pid) do

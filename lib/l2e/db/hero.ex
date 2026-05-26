@@ -4,10 +4,10 @@ defmodule L2E.DB.Hero do
 
   @primary_key {:char_id, :integer, autogenerate: false}
   schema "heroes" do
-    field :char_name, :string
-    field :class_id, :integer
-    field :elected_at, :utc_datetime
-    field :is_active, :boolean, default: true
+    field(:char_name, :string)
+    field(:class_id, :integer)
+    field(:elected_at, :utc_datetime)
+    field(:is_active, :boolean, default: true)
 
     timestamps()
   end
@@ -34,6 +34,6 @@ defmodule L2E.DB.Hero do
 
   @doc "Return all currently active heroes."
   def active_heroes do
-    L2E.Repo.all(from h in __MODULE__, where: h.is_active == true)
+    L2E.Repo.all(from(h in __MODULE__, where: h.is_active == true))
   end
 end

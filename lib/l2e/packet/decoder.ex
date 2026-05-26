@@ -67,6 +67,8 @@ defmodule L2E.Packet.Decoder do
   def decode(0x2A, body), do: Client.RequestAnswerJoinParty.decode(body)
   def decode(0x2B, body), do: Client.RequestWithDrawalParty.decode(body)
   def decode(0x2C, body), do: Client.RequestOustPartyMember.decode(body)
+  # M82: Party loot mode
+  def decode(0x5B, body), do: Client.RequestPartyLootModify.decode(body)
   def decode(0x2F, body), do: Client.RequestMagicSkillUse.decode(body)
   # M54: Shortcut bar
   def decode(0x31, body), do: Client.RequestWarehouseDeposit.decode(body)
@@ -160,6 +162,9 @@ defmodule L2E.Packet.Decoder do
   # M72: Pet
   def decode(0x8A, body), do: Client.RequestPetUseItem.decode(body)
   def decode(0x8F, body), do: Client.RequestPetGetItem.decode(body)
+
+  # M86: Fishing
+  def decode(0x89, body), do: Client.RequestFishing.decode(body)
 
   # M61-B: Seven Signs Quest
   def decode(0xC7, body), do: Client.RequestSSQStatus.decode(body)

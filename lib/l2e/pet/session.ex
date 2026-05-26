@@ -82,7 +82,11 @@ defmodule L2E.Pet.Session do
       # Behavior
       action: :follow,
       hunger_timer: hunger_timer,
-      regen_timer: regen_timer
+      regen_timer: regen_timer,
+      # Combat
+      in_combat: false,
+      current_target_pid: nil,
+      attack_timer: nil
     }
 
     # Announce this pet to the world so nearby players can see it on summon.
@@ -137,7 +141,67 @@ defmodule L2E.Pet.Session do
     {:noreply, new_state}
   end
 
+  # Owner tells the pet to attack a target
+  def handle_cast({:attack_target, target_pid}, state) do
+    if state.in_combat and state.current_target_pid == target_pid do
+      {:noreply, state}
+    else
+      cancel_timer(state.attack_timer)
+      timer = Process.send_after(self(), :pet_attack_tick, 2_000)
+      {:noreply, %{state | in_combat: true, current_target_pid: target_pid, attack_timer: timer}}
+    end
+  end
+
+  def handle_cast(:stop_combat, state) do
+    cancel_timer(state.attack_timer)
+    {:noreply, %{state | in_combat: false, current_target_pid: nil, attack_timer: nil}}
+  end
+
+  # Pet receives damage from a target attacking it back
+  def handle_cast({:take_damage, amount, _type, _from_pid}, state) do
+    new_hp = max(0.0, state.hp - amount)
+
+    if new_hp <= 0.0 do
+      send(state.owner_pid, {:pet_died})
+      {:stop, :normal, %{state | hp: 0.0}}
+    else
+      {:noreply, %{state | hp: new_hp}}
+    end
+  end
+
+  # EXP gain from owner kills
+  def handle_cast({:gain_exp, amount}, state) do
+    new_exp = state.exp + amount
+    new_state = %{state | exp: new_exp}
+    new_state = check_level_up(new_state)
+    send(state.owner_pid, {:pet_exp_updated, new_state.exp, new_state.level})
+    {:noreply, new_state}
+  end
+
   def handle_cast(_, state), do: {:noreply, state}
+
+  def handle_info(:pet_attack_tick, %{in_combat: true, current_target_pid: target_pid} = state)
+      when not is_nil(target_pid) do
+    alive =
+      try do
+        GenServer.call(target_pid, :is_alive, 1_000)
+      catch
+        _, _ -> false
+      end
+
+    if alive do
+      damage = calculate_pet_damage(state)
+      GenServer.cast(target_pid, {:take_damage, damage, :pet, self()})
+      timer = Process.send_after(self(), :pet_attack_tick, 2_000)
+      {:noreply, %{state | attack_timer: timer}}
+    else
+      {:noreply, %{state | in_combat: false, current_target_pid: nil, attack_timer: nil}}
+    end
+  end
+
+  def handle_info(:pet_attack_tick, state) do
+    {:noreply, %{state | in_combat: false, current_target_pid: nil, attack_timer: nil}}
+  end
 
   @impl GenServer
   def handle_info(:hunger_tick, state) do
@@ -173,4 +237,40 @@ defmodule L2E.Pet.Session do
   end
 
   def handle_info(_, state), do: {:noreply, state}
+
+  # -----------------------------------------------------------------------
+  # Private helpers
+  # -----------------------------------------------------------------------
+
+  defp cancel_timer(nil), do: :ok
+
+  defp cancel_timer(ref) when is_reference(ref) do
+    Process.cancel_timer(ref)
+    :ok
+  end
+
+  defp calculate_pet_damage(state) do
+    template =
+      case L2E.Data.PetDataTable.get(Map.get(state, :npc_id, 0)) do
+        {:ok, t} -> t
+        _ -> %{}
+      end
+
+    base = Map.get(template, :p_atk, 20)
+    base + state.level * 2 + :rand.uniform(10) - 5
+  end
+
+  defp check_level_up(%{level: 85} = state), do: state
+
+  defp check_level_up(state) do
+    threshold = state.level * state.level * 100
+
+    if state.exp >= threshold do
+      new_state = %{state | level: state.level + 1, exp: state.exp - threshold}
+      send(state.owner_pid, {:pet_level_up, new_state.level})
+      check_level_up(new_state)
+    else
+      state
+    end
+  end
 end

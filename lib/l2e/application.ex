@@ -98,8 +98,14 @@ defmodule L2E.Application do
       # Party supervisor — manages active party processes
       L2E.Party.Supervisor,
 
+      # M83: Command Channel supervisor — manages multi-party command channel processes
+      L2E.CommandChannel.Supervisor,
+
       # Clan supervisor — manages active clan processes
       L2E.Clan.Supervisor,
+
+      # M85: Clan hall auction manager (singleton — one auction system for all halls)
+      L2E.ClanHall.AuctionManager,
 
       # Warehouse supervisor — manages per-character warehouse processes
       L2E.Warehouse.Supervisor,

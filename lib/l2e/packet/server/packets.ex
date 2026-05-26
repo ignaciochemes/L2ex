@@ -1133,6 +1133,12 @@ defmodule L2E.Packet.Server.SystemMessage do
   def msg_rejected, do: 614
   def msg_party_full, do: 1307
 
+  # M82: Party loot mode
+  # 1389 = "The party loot type has been changed to %s."  (syschat.dat)
+  # 1390 = "Only a party leader may change the party loot type."
+  def msg_loot_mode_changed, do: 1389
+  def msg_only_leader_can_change_loot, do: 1390
+
   @impl L2E.Packet.Encodable
   def encode(%__MODULE__{message_id: id}) do
     <<@opcode::8, id::little-32>>
@@ -1461,6 +1467,76 @@ defmodule L2E.Packet.Server.PledgeShowMemberListDelete do
   def encode(%__MODULE__{char_name: name}) do
     name_bin = encode_utf16(name || "")
     <<@opcode::8>> <> name_bin
+  end
+
+  defp encode_utf16(str) do
+    :unicode.characters_to_binary(str, :utf8, {:utf16, :little}) <> <<0::16>>
+  end
+end
+
+defmodule L2E.Packet.Server.PledgeInfo do
+  @moduledoc """
+  Opcode 0x83 — sends basic clan identification info.
+
+  Binary layout (PledgeInfo.java):
+    clan_id(32) clan_name(string) ally_name(string)
+
+  Reference: ServerPackets.PLEDGE_INFO(0x83)
+  """
+  @behaviour L2E.Packet.Encodable
+
+  defstruct [:clan_id, :clan_name, ally_name: ""]
+  @type t :: %__MODULE__{}
+
+  @opcode 0x83
+
+  @impl L2E.Packet.Encodable
+  def encode(%__MODULE__{} = p) do
+    clan_name_bin = encode_utf16(p.clan_name || "")
+    ally_name_bin = encode_utf16(p.ally_name || "")
+    <<@opcode::8, p.clan_id || 0::little-32>> <> clan_name_bin <> ally_name_bin
+  end
+
+  defp encode_utf16(str) do
+    :unicode.characters_to_binary(str, :utf8, {:utf16, :little}) <> <<0::16>>
+  end
+end
+
+defmodule L2E.Packet.Server.PledgeShowInfoUpdate do
+  @moduledoc """
+  Opcode 0x88 — sends detailed clan status info including level and reputation.
+
+  Binary layout (PledgeShowInfoUpdate.java):
+    clan_id(32) crest_id(32) level(32) castle_id(32) hideout_id(32)
+    rank(32) reputation(32) unknown1(32) unknown2(32) ally_id(32)
+    ally_name(string) ally_crest_id(32) is_at_war(32)
+
+  Reference: ServerPackets.PLEDGE_SHOW_INFO_UPDATE(0x88)
+  """
+  @behaviour L2E.Packet.Encodable
+
+  defstruct [
+    :clan_id,
+    crest_id: 0,
+    level: 1,
+    castle_id: 0,
+    clan_hall_id: 0,
+    reputation_points: 0,
+    ally_name: ""
+  ]
+
+  @type t :: %__MODULE__{}
+
+  @opcode 0x88
+
+  @impl L2E.Packet.Encodable
+  def encode(%__MODULE__{} = p) do
+    ally_name_bin = encode_utf16(p.ally_name || "")
+
+    <<@opcode::8, p.clan_id || 0::little-32, p.crest_id || 0::little-32, p.level || 1::little-32,
+      p.castle_id || 0::little-32, p.clan_hall_id || 0::little-32, 0::little-32,
+      p.reputation_points || 0::little-32, 0::little-32, 0::little-32,
+      0::little-32>> <> ally_name_bin <> <<0::little-32, 0::little-32>>
   end
 
   defp encode_utf16(str) do
@@ -2854,10 +2930,9 @@ defmodule L2E.Packet.Server.ExDuelUpdateUserInfo do
   def encode(%__MODULE__{char_name: char_name, hp: hp, max_hp: max_hp, cp: cp, max_cp: max_cp}) do
     name_bytes = encode_utf16le(char_name || "")
 
-    <<0xFE::8, 0x4F::little-16,
-      byte_size(name_bytes) + 2::little-32, name_bytes::binary, 0, 0,
-      trunc(hp || 0)::little-32, trunc(max_hp || 0)::little-32,
-      trunc(cp || 0)::little-32, trunc(max_cp || 0)::little-32>>
+    <<0xFE::8, 0x4F::little-16, byte_size(name_bytes) + 2::little-32, name_bytes::binary, 0, 0,
+      trunc(hp || 0)::little-32, trunc(max_hp || 0)::little-32, trunc(cp || 0)::little-32,
+      trunc(max_cp || 0)::little-32>>
   end
 
   defp encode_utf16le(str) do
@@ -3037,5 +3112,101 @@ defmodule L2E.Packet.Server.ExHeroList do
 
   defp encode_utf16le(str) do
     :unicode.characters_to_binary(str, :utf8, {:utf16, :little})
+  end
+end
+
+# ---- M83: Command Channel (MPCC) packets ------------------------------------
+
+defmodule L2E.Packet.Server.ExOpenMPCC do
+  @moduledoc """
+  0xFE/0x48 — Opens the Command Channel (MPCC) UI on the client.
+  Sent to all party members when their party joins a CC.
+  """
+  @behaviour L2E.Packet.Encodable
+
+  defstruct [:cc_leader_name]
+
+  @impl L2E.Packet.Encodable
+  def encode(%__MODULE__{cc_leader_name: name}) do
+    name_utf16 = encode_utf16le(name || "")
+    <<0xFE::8, 0x48::little-16, byte_size(name_utf16) + 2::little-32, name_utf16::binary, 0, 0>>
+  end
+
+  defp encode_utf16le(str) do
+    :unicode.characters_to_binary(str, :utf8, {:utf16, :little})
+  end
+end
+
+defmodule L2E.Packet.Server.ExCloseMPCC do
+  @moduledoc "0xFE/0x49 — Closes the Command Channel UI on the client."
+  @behaviour L2E.Packet.Encodable
+
+  defstruct []
+
+  @impl L2E.Packet.Encodable
+  def encode(%__MODULE__{}) do
+    <<0xFE::8, 0x49::little-16>>
+  end
+end
+
+defmodule L2E.Packet.Server.ExMPCCPartyInfoUpdate do
+  @moduledoc """
+  0xFE/0x4A — Updates the party info display inside the CC UI.
+  type: 0 = party joined, 1 = party left
+  """
+  @behaviour L2E.Packet.Encodable
+
+  defstruct [:char_id, :type]
+
+  @impl L2E.Packet.Encodable
+  def encode(%__MODULE__{char_id: char_id, type: type}) do
+    <<0xFE::8, 0x4A::little-16, char_id || 0::little-32, type || 0::little-32>>
+  end
+end
+
+# ---- M86: Fishing packets (0xFE extended) ------------------------------------
+
+defmodule L2E.Packet.Server.ExFishingStart do
+  @moduledoc """
+  0xFE/0x1F — Starts the fishing minigame UI on the client.
+  Sent when the player casts their line and fishing begins.
+  """
+  @behaviour L2E.Packet.Encodable
+
+  defstruct [:char_id, :x, :y, :z]
+
+  @impl L2E.Packet.Encodable
+  def encode(%__MODULE__{char_id: char_id, x: x, y: y, z: z}) do
+    <<0xFE::8, 0x1F::little-16, char_id::little-32, x::little-32-signed, y::little-32-signed,
+      z::little-32-signed>>
+  end
+end
+
+defmodule L2E.Packet.Server.ExFishingEnd do
+  @moduledoc """
+  0xFE/0x22 — Ends the fishing minigame UI on the client.
+  win: 0 = escaped or cancelled, 1 = fish caught.
+  """
+  @behaviour L2E.Packet.Encodable
+
+  defstruct [:char_id, :win]
+
+  @impl L2E.Packet.Encodable
+  def encode(%__MODULE__{char_id: char_id, win: win}) do
+    <<0xFE::8, 0x22::little-16, char_id::little-32, win::little-32>>
+  end
+end
+
+defmodule L2E.Packet.Server.ExFishingHpRegen do
+  @moduledoc """
+  0xFE/0x21 — Updates the HP bar of the fish during the reel minigame.
+  """
+  @behaviour L2E.Packet.Encodable
+
+  defstruct [:char_id, :fish_hp, :fish_max_hp]
+
+  @impl L2E.Packet.Encodable
+  def encode(%__MODULE__{char_id: char_id, fish_hp: fish_hp, fish_max_hp: fish_max_hp}) do
+    <<0xFE::8, 0x21::little-16, char_id::little-32, fish_hp::little-32, fish_max_hp::little-32>>
   end
 end

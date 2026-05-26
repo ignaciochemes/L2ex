@@ -29,9 +29,34 @@ defmodule L2E.Clan do
   use GenServer, restart: :temporary
   require Logger
 
+  import Ecto.Query, only: [from: 2]
+
   alias L2E.Packet.Server
+  alias L2E.Repo
 
   @invite_timeout_ms 30_000
+
+  @level_thresholds %{
+    1 => 0,
+    2 => 20,
+    3 => 100,
+    4 => 350,
+    5 => 1_000,
+    6 => 2_500,
+    7 => 5_000,
+    8 => 10_000
+  }
+
+  @max_members_by_level %{
+    1 => 10,
+    2 => 20,
+    3 => 30,
+    4 => 40,
+    5 => 50,
+    6 => 60,
+    7 => 80,
+    8 => 90
+  }
 
   @type member :: %{
           char_id: pos_integer(),
@@ -83,6 +108,16 @@ defmodule L2E.Clan do
     GenServer.cast(clan_pid, {:kick, target_name})
   end
 
+  def add_reputation(clan_pid, amount), do: GenServer.cast(clan_pid, {:add_reputation, amount})
+  def set_reputation(clan_pid, amount), do: GenServer.cast(clan_pid, {:set_reputation, amount})
+  def get_info(clan_pid), do: GenServer.call(clan_pid, :get_info)
+  def max_members(clan_pid), do: GenServer.call(clan_pid, :max_members)
+
+  def add_clan_skill(clan_pid, skill_id, skill_level),
+    do: GenServer.cast(clan_pid, {:add_clan_skill, skill_id, skill_level})
+
+  def get_skills(clan_pid), do: GenServer.call(clan_pid, :get_skills)
+
   # -----------------------------------------------------------------------
   # GenServer callbacks
   # -----------------------------------------------------------------------
@@ -96,10 +131,37 @@ defmodule L2E.Clan do
 
     Registry.register(L2E.Session.Registry, {:clan, clan_id}, self())
 
+    {db_level, db_reputation, db_castle_id, db_clan_hall_id} =
+      try do
+        case Repo.get(L2E.DB.Clan, clan_id) do
+          %L2E.DB.Clan{} = record ->
+            {record.level || 1, record.reputation_points || 0, record.castle_id || 0,
+             record.clan_hall_id || 0}
+
+          nil ->
+            {1, 0, 0, 0}
+        end
+      rescue
+        _ -> {1, 0, 0, 0}
+      end
+
+    db_skills =
+      try do
+        Repo.all(from(cs in L2E.DB.ClanSkill, where: cs.clan_id == ^clan_id))
+        |> Enum.reduce(%{}, fn cs, acc -> Map.put(acc, cs.skill_id, cs.skill_level) end)
+      rescue
+        _ -> %{}
+      end
+
     state = %{
       clan_id: clan_id,
       clan_name: clan_name,
       leader_id: leader_id,
+      level: db_level,
+      reputation_points: db_reputation,
+      castle_id: db_castle_id,
+      clan_hall_id: db_clan_hall_id,
+      skills: db_skills,
       # %{char_id => member()}
       members: %{},
       # %{char_id => {pid, timer_ref}}
@@ -197,7 +259,138 @@ defmodule L2E.Clan do
     {:noreply, state}
   end
 
+  def handle_cast({:add_reputation, amount}, state) when is_integer(amount) do
+    new_rep = max(0, state.reputation_points + amount)
+    new_state = %{state | reputation_points: new_rep}
+    new_state = check_level_up(new_state)
+
+    Task.start(fn ->
+      case Repo.get(L2E.DB.Clan, state.clan_id) do
+        nil ->
+          :ok
+
+        record ->
+          record
+          |> Ecto.Changeset.change(%{
+            reputation_points: new_state.reputation_points,
+            level: new_state.level
+          })
+          |> Repo.update()
+      end
+    end)
+
+    Phoenix.PubSub.broadcast(
+      L2E.PubSub,
+      "clan:#{state.clan_id}",
+      {:clan_updated, new_state.level, new_state.reputation_points}
+    )
+
+    {:noreply, new_state}
+  end
+
+  def handle_cast({:set_reputation, amount}, state) when is_integer(amount) and amount >= 0 do
+    new_state = %{state | reputation_points: amount}
+    new_state = check_level_up(new_state)
+
+    Task.start(fn ->
+      case Repo.get(L2E.DB.Clan, state.clan_id) do
+        nil ->
+          :ok
+
+        record ->
+          record
+          |> Ecto.Changeset.change(%{
+            reputation_points: new_state.reputation_points,
+            level: new_state.level
+          })
+          |> Repo.update()
+      end
+    end)
+
+    Phoenix.PubSub.broadcast(
+      L2E.PubSub,
+      "clan:#{state.clan_id}",
+      {:clan_updated, new_state.level, new_state.reputation_points}
+    )
+
+    {:noreply, new_state}
+  end
+
+  def handle_cast({:add_clan_skill, skill_id, skill_level}, state) do
+    new_skills = Map.put(state.skills, skill_id, skill_level)
+
+    Task.start(fn ->
+      %L2E.DB.ClanSkill{}
+      |> L2E.DB.ClanSkill.changeset(%{
+        clan_id: state.clan_id,
+        skill_id: skill_id,
+        skill_level: skill_level
+      })
+      |> Repo.insert(
+        on_conflict: {:replace, [:skill_level, :updated_at]},
+        conflict_target: [:clan_id, :skill_id]
+      )
+    end)
+
+    Phoenix.PubSub.broadcast(
+      L2E.PubSub,
+      "clan:#{state.clan_id}",
+      {:clan_skill_added, skill_id, skill_level}
+    )
+
+    {:noreply, %{state | skills: new_skills}}
+  end
+
+  @impl GenServer
+  def handle_cast({:set_clan_hall, hall_id}, state) do
+    new_state = %{state | clan_hall_id: hall_id}
+
+    Task.start(fn ->
+      case Repo.get(L2E.DB.Clan, state.clan_id) do
+        nil ->
+          :ok
+
+        record ->
+          record
+          |> Ecto.Changeset.change(%{clan_hall_id: hall_id})
+          |> Repo.update()
+      end
+    end)
+
+    Phoenix.PubSub.broadcast(L2E.PubSub, "clan:#{state.clan_id}", {:clan_hall_acquired, hall_id})
+    {:noreply, new_state}
+  end
+
   def handle_cast(_msg, state), do: {:noreply, state}
+
+  # ── Clan info / skills queries ─────────────────────────────────────────────────
+
+  @impl true
+  def handle_call(:get_info, _from, state) do
+    {:reply,
+     %{
+       clan_id: state.clan_id,
+       clan_name: state.clan_name,
+       level: state.level,
+       reputation_points: state.reputation_points,
+       leader_id: state.leader_id,
+       castle_id: state.castle_id,
+       clan_hall_id: state.clan_hall_id,
+       members: state.members
+     }, state}
+  end
+
+  def handle_call(:max_members, _from, state) do
+    {:reply, Map.get(@max_members_by_level, state.level, 10), state}
+  end
+
+  def handle_call(:get_skills, _from, state) do
+    {:reply, state.skills, state}
+  end
+
+  def handle_call(_msg, _from, state) do
+    {:reply, {:error, :unknown_call}, state}
+  end
 
   # ── Invite timeout ────────────────────────────────────────────────────────────
 
@@ -341,6 +534,31 @@ defmodule L2E.Clan do
     end
   rescue
     _ -> ""
+  end
+
+  defp check_level_up(state) when state.level >= 8, do: state
+
+  defp check_level_up(state) do
+    next_level = state.level + 1
+
+    case Map.get(@level_thresholds, next_level) do
+      nil ->
+        state
+
+      threshold when state.reputation_points >= threshold ->
+        new_state = %{state | level: next_level}
+
+        Phoenix.PubSub.broadcast(
+          L2E.PubSub,
+          "clan:#{state.clan_id}",
+          {:clan_level_up, next_level}
+        )
+
+        check_level_up(new_state)
+
+      _ ->
+        state
+    end
   end
 
   defp register_member(char_id, clan_pid) do

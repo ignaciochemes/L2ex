@@ -12,7 +12,12 @@ defmodule L2E.DB.Clan do
     field(:name, :string)
     field(:leader_id, :integer)
     field(:description, :string)
+    field(:level, :integer, default: 1)
+    field(:reputation_points, :integer, default: 0)
+    field(:castle_id, :integer, default: 0)
+    field(:clan_hall_id, :integer, default: 0)
     has_many(:warehouse_items, L2E.DB.ClanWarehouseItem, foreign_key: :clan_id)
+    has_many(:clan_skills, L2E.DB.ClanSkill, foreign_key: :clan_id)
     timestamps(type: :utc_datetime_usec)
   end
 

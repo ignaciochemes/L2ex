@@ -93,6 +93,12 @@ defmodule L2E.Admin.CommandHandler do
       ["reload", target] when target in ["skills", "npcs", "items", "spawns"] ->
         {:ok, {:reload, target}}
 
+      ["set_clan_level", level_str] ->
+        case Integer.parse(level_str) do
+          {level, ""} when level in 1..8 -> {:ok, {:set_clan_level, level}}
+          _ -> :ignored
+        end
+
       _ ->
         :ignored
     end

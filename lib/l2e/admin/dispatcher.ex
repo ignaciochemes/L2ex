@@ -98,6 +98,10 @@ defmodule L2E.Admin.Dispatcher do
     L2E.Admin.Commands.Reload.execute(args)
   end
 
+  defp do_dispatch("set_clan_level", args, player_pid, access_level) when access_level > 0 do
+    L2E.Admin.Commands.SetClanLevel.execute(player_pid, args)
+  end
+
   # Unknown command or insufficient access
   defp do_dispatch(cmd, _args, _player_pid, access_level) do
     {:error, "Unknown command '#{cmd}' or insufficient access (level: #{access_level})"}

@@ -142,7 +142,10 @@ defmodule L2E.Skill.Effect do
   # ── M80: HP Drain ───────────────────────────────────────────────────────────
 
   @doc "HP drain: deals magic damage AND heals caster for a percentage of damage dealt."
-  @spec apply_hp_drain(map(), map(), pos_integer(), float()) :: %{damage: pos_integer(), healed: pos_integer()}
+  @spec apply_hp_drain(map(), map(), pos_integer(), float()) :: %{
+          damage: pos_integer(),
+          healed: pos_integer()
+        }
   def apply_hp_drain(caster_stats, target_stats, power, drain_ratio \\ 0.5) do
     damage = apply_magic_damage(caster_stats, target_stats, power)
     healed = round(damage * drain_ratio)
