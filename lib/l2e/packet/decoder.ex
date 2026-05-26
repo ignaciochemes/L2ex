@@ -152,6 +152,7 @@ defmodule L2E.Packet.Decoder do
 
   # M71: Siege
   def decode(0x47, body), do: Client.RequestSiegeInfo.decode(body)
+  def decode(0xB2, body), do: Client.RequestJoinSiege.decode(body)
 
   # M72: Pet
   def decode(0x8A, body), do: Client.RequestPetUseItem.decode(body)
@@ -187,6 +188,7 @@ defmodule L2E.Packet.Decoder do
 
   # M70: Olympiad (extended)
   defp decode_ext(0x13, body), do: Client.RequestOlympiadMatchList.decode(body)
+  defp decode_ext(0x29, body), do: Client.RequestJoinOlympiad.decode(body)
 
   # M68-B: Sub-class switching (extended)
   defp decode_ext(0x31, body), do: Client.RequestSubclassInfo.decode(body)

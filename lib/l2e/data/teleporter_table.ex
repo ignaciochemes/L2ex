@@ -165,6 +165,7 @@ defmodule L2E.Data.TeleporterTable do
   defp parse_type(_), do: :normal
 
   defp safe_integer("", default), do: default
+
   defp safe_integer(s, default) when is_binary(s) do
     case Integer.parse(s) do
       {n, _} -> n

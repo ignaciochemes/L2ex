@@ -3982,13 +3982,72 @@ defmodule L2E.Session.PlayerSession do
     {:noreply, state}
   end
 
-  # ---- M71: Siege -------------------------------------------------------------
-  # RequestSiegeInfo (0x47) has no body in Interlude — just acknowledges.
-  # Return basic info for all castles in a future pass; for now, no-op.
-
-  defp handle_packet(%Client.RequestSiegeInfo{}, state) do
+  defp handle_packet(%Client.RequestJoinOlympiad{}, %{auth_state: :in_world} = state) do
+    if OlympiadManager.active?() do
+      case OlympiadManager.register(state.char_id, state.char_name, state.class_id, self()) do
+        :ok ->
+          send(state.conn_pid, {:send_packet, %Server.ExOlympiadMode{mode: 3}})
+        {:error, :already_registered} ->
+          send(state.conn_pid, {:send_packet, %Server.ExOlympiadMode{mode: 0}})
+      end
+    end
     {:noreply, state}
   end
+
+  defp handle_packet(%Client.RequestJoinOlympiad{}, state), do: {:noreply, state}
+
+  # ---- M71: Siege -------------------------------------------------------------
+  # RequestSiegeInfo (0x47) has no body in Interlude — just acknowledges.
+  # Send SiegeInfo for all castles.
+
+  defp handle_packet(%Client.RequestSiegeInfo{}, state) do
+    # Send SiegeInfo for all castles
+    Enum.each(SiegeManager.all_castles(), fn castle ->
+      attackers = SiegeManager.get_attackers(castle.id)
+      clan_name = if castle.owner_clan_id, do: "(clan #{castle.owner_clan_id})", else: ""
+      siege_time = if castle.siege_date, do: DateTime.to_unix(castle.siege_date), else: 0
+      send(state.conn_pid, {:send_packet, %Server.SiegeInfo{
+        residence_id: castle.id,
+        show_controls: 0,
+        owner_id: castle.owner_clan_id || 0,
+        clan_name: clan_name,
+        leader_name: "",
+        ally_id: 0,
+        ally_name: "",
+        current_time: System.os_time(:second),
+        siege_time: siege_time,
+        siege_times: []
+      }})
+      _ = attackers
+    end)
+    {:noreply, state}
+  end
+
+  defp handle_packet(
+         %Client.RequestJoinSiege{castle_id: castle_id, is_attacker: is_attacker},
+         %{auth_state: :in_world} = state
+       ) do
+    clan_id = Map.get(state, :clan_id, 0)
+    clan_name = Map.get(state, :clan_name, "#{state.char_name}'s Clan")
+
+    result =
+      if is_attacker do
+        SiegeManager.register_attacker(castle_id, clan_id, clan_name)
+      else
+        SiegeManager.register_defender(castle_id, clan_id, clan_name)
+      end
+
+    case result do
+      :ok ->
+        Logger.info("[PlayerSession] #{state.char_name} joined siege #{castle_id} as #{if is_attacker, do: "attacker", else: "defender"}")
+      {:error, :already_registered} ->
+        Logger.debug("[PlayerSession] #{state.char_name} already registered for siege #{castle_id}")
+    end
+
+    {:noreply, state}
+  end
+
+  defp handle_packet(%Client.RequestJoinSiege{}, state), do: {:noreply, state}
 
   # ---- M72: Pet ---------------------------------------------------------------
 
@@ -5012,10 +5071,14 @@ defmodule L2E.Session.PlayerSession do
         }
 
         # 4. Broadcast updated sub info + skills + user info
-        send(state.conn_pid, {:send_packet, %Server.ExSubclassInfo{
-          subclasses: state.subclasses,
-          active_index: target_index
-        }})
+        send(
+          state.conn_pid,
+          {:send_packet,
+           %Server.ExSubclassInfo{
+             subclasses: state.subclasses,
+             active_index: target_index
+           }}
+        )
 
         send(state.conn_pid, {:send_packet, build_skill_list_packet(new_skills)})
 

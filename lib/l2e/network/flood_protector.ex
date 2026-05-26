@@ -85,7 +85,10 @@ defmodule L2E.Network.FloodProtector do
   Returns a map with `:threshold` and `:window_secs` keys.
   Falls back to default if opcode is not explicitly configured.
   """
-  @spec get_opcode_config(integer() | atom()) :: %{threshold: pos_integer(), window_secs: pos_integer()}
+  @spec get_opcode_config(integer() | atom()) :: %{
+          threshold: pos_integer(),
+          window_secs: pos_integer()
+        }
   def get_opcode_config(opcode) do
     config = Application.get_env(:l2e, :flood_protectors, %{})
     game_server_config = config[:game_server] || []
@@ -101,8 +104,11 @@ defmodule L2E.Network.FloodProtector do
         case Enum.find(game_server_config, fn {_name, cfg} ->
                cfg[:opcode] == opcode
              end) do
-          {_name, cfg} -> %{threshold: cfg[:threshold] || 100, window_secs: cfg[:window_secs] || 10}
-          nil -> default_config()
+          {_name, cfg} ->
+            %{threshold: cfg[:threshold] || 100, window_secs: cfg[:window_secs] || 10}
+
+          nil ->
+            default_config()
         end
     end
   end

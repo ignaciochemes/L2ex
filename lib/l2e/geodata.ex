@@ -32,8 +32,8 @@ defmodule L2E.Geodata do
   require Logger
 
   # NSWE bitmask constants (L2J Cell.java)
-  @nswe_east  0x1
-  @nswe_west  0x2
+  @nswe_east 0x1
+  @nswe_west 0x2
   @nswe_south 0x4
   @nswe_north 0x8
 
@@ -125,6 +125,7 @@ defmodule L2E.Geodata do
 
       {:complex, cells} ->
         needed = direction_to_nswe(x1, y1, x2, y2)
+
         if needed == 0 do
           true
         else
@@ -135,6 +136,7 @@ defmodule L2E.Geodata do
 
       {:multilayer, cells} ->
         needed = direction_to_nswe(x1, y1, x2, y2)
+
         if needed == 0 do
           true
         else

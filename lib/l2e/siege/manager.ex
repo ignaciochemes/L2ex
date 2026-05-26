@@ -83,6 +83,16 @@ defmodule L2E.Siege.Manager do
     GenServer.call(__MODULE__, {:end_siege, castle_id})
   end
 
+  @doc "Transfer castle ownership to attacker clan. Called when siege ends with attackers winning."
+  def transfer_castle(castle_id, winner_clan_id, winner_clan_name) do
+    GenServer.call(__MODULE__, {:transfer_castle, castle_id, winner_clan_id, winner_clan_name})
+  end
+
+  @doc "Schedule a siege for castle_id at the given DateTime."
+  def schedule_siege(castle_id, siege_date) do
+    GenServer.cast(__MODULE__, {:schedule_siege, castle_id, siege_date})
+  end
+
   @impl GenServer
   def init(_) do
     :ets.new(@table, [:named_table, :public, read_concurrency: true])
@@ -153,9 +163,56 @@ defmodule L2E.Siege.Manager do
     end
   end
 
+  def handle_call({:transfer_castle, castle_id, winner_clan_id, winner_clan_name}, _from, state) do
+    case :ets.lookup(@table, {:castle, castle_id}) do
+      [{_, castle}] ->
+        new_castle = %{castle |
+          owner_clan_id: winner_clan_id,
+          siege_status: :ended
+        }
+        :ets.insert(@table, {{:castle, castle_id}, new_castle})
+        :ets.insert(@table, {{:attackers, castle_id}, []})
+        :ets.insert(@table, {{:defenders, castle_id}, []})
+        Phoenix.PubSub.broadcast(L2E.PubSub, "world:siege",
+          {:castle_captured, castle_id, winner_clan_id, winner_clan_name})
+        Logger.info("[Siege] Castle #{castle_id} captured by clan #{winner_clan_id} (#{winner_clan_name})")
+        {:reply, :ok, state}
+      [] ->
+        {:reply, {:error, :not_found}, state}
+    end
+  end
+
+  @impl GenServer
+  def handle_cast({:schedule_siege, castle_id, siege_date}, state) do
+    case :ets.lookup(@table, {:castle, castle_id}) do
+      [{_, castle}] ->
+        updated = %{castle | siege_date: siege_date}
+        :ets.insert(@table, {{:castle, castle_id}, updated})
+        ms_until = max(0, DateTime.diff(siege_date, DateTime.utc_now(), :millisecond))
+        Process.send_after(self(), {:siege_start_timer, castle_id}, ms_until)
+        Logger.info("[Siege] Castle #{castle_id} siege scheduled in #{div(ms_until, 1000)}s")
+      [] -> :ok
+    end
+    {:noreply, state}
+  end
+
   @impl GenServer
   def handle_info(:siege_end, state) do
     Logger.info("[Siege] Active siege ended.")
+    {:noreply, state}
+  end
+
+  def handle_info({:siege_start_timer, castle_id}, state) do
+    Logger.info("[Siege] Auto-starting siege for castle #{castle_id}")
+    start_siege(castle_id)
+    # Schedule end 2 hours later (L2 Interlude default: 2 hours)
+    Process.send_after(self(), {:siege_end_timer, castle_id}, :timer.hours(2))
+    {:noreply, state}
+  end
+
+  def handle_info({:siege_end_timer, castle_id}, state) do
+    Logger.info("[Siege] Auto-ending siege for castle #{castle_id}")
+    end_siege(castle_id)
     {:noreply, state}
   end
 

@@ -22,7 +22,7 @@ defmodule Mix.Tasks.LoginProbe do
   def run(args) do
     Application.ensure_all_started(:l2e)
 
-    host = (Enum.at(args, 0, "127.0.0.1") |> String.to_charlist())
+    host = Enum.at(args, 0, "127.0.0.1") |> String.to_charlist()
     port = Enum.at(args, 1, "2106") |> Integer.parse() |> elem(0)
     username = Enum.at(args, 2, "probe")
     password = Enum.at(args, 3, "probe123")
@@ -41,7 +41,9 @@ defmodule Mix.Tasks.LoginProbe do
     info("  session_id:       #{init.session_id}")
 
     if init.protocol_version != @protocol_version do
-      err("  ⚠  PROTOCOL MISMATCH: got 0x#{hex(init.protocol_version)}, expected 0x#{hex(@protocol_version)}")
+      err(
+        "  ⚠  PROTOCOL MISMATCH: got 0x#{hex(init.protocol_version)}, expected 0x#{hex(@protocol_version)}"
+      )
     else
       info("  protocol_version: 0x#{hex(init.protocol_version)} ✓")
     end
@@ -55,9 +57,12 @@ defmodule Mix.Tasks.LoginProbe do
 
     # ── Step 3: GGAuth (server response, static-key encrypted) ───────────────
     info("\n[3] Waiting for GGAuth...")
+
     case recv_frame(sock, 3000) do
       {:ok, body} ->
-        info("  Received #{byte_size(body)} bytes (static-BF-encrypted) — server accepted AuthGameGuard ✓")
+        info(
+          "  Received #{byte_size(body)} bytes (static-BF-encrypted) — server accepted AuthGameGuard ✓"
+        )
 
       {:error, reason} ->
         err("  No GGAuth response: #{inspect(reason)}")
@@ -75,9 +80,11 @@ defmodule Mix.Tasks.LoginProbe do
 
     # ── Step 5: LoginOk or LoginFail ─────────────────────────────────────────
     info("\n[5] Waiting for server response...")
+
     case recv_frame(sock, 5000) do
       {:ok, body} ->
         decrypted = L2E.Commons.Blowfish.decrypt_ecb(body, bf_ctx)
+
         case decrypted do
           <<0x03, login_ok1::little-32, login_ok2::little-32, _rest::binary>> ->
             info("  ✓ LoginOk! login_ok1=#{login_ok1} login_ok2=#{login_ok2}")
@@ -89,17 +96,29 @@ defmodule Mix.Tasks.LoginProbe do
             case recv_frame(sock, 3000) do
               {:ok, body6} ->
                 <<opcode6::8, rest6::binary>> = L2E.Commons.Blowfish.decrypt_ecb(body6, bf_ctx)
-                info("  ServerList opcode=0x#{Integer.to_string(opcode6, 16)} (#{byte_size(rest6)} bytes body) ✓")
+
+                info(
+                  "  ServerList opcode=0x#{Integer.to_string(opcode6, 16)} (#{byte_size(rest6)} bytes body) ✓"
+                )
 
                 # ── Step 7: RequestServerLogin (server_id=1) ────────────────
                 info("\n[7] Sending RequestServerLogin (server_id=1)")
-                send_session(sock, <<0x02, login_ok1::little-32, login_ok2::little-32, 1::8>>, bf_ctx)
+
+                send_session(
+                  sock,
+                  <<0x02, login_ok1::little-32, login_ok2::little-32, 1::8>>,
+                  bf_ctx
+                )
 
                 case recv_frame(sock, 3000) do
                   {:ok, body7} ->
                     <<opcode7::8, p1::little-32, p2::little-32, _::binary>> =
                       L2E.Commons.Blowfish.decrypt_ecb(body7, bf_ctx)
-                    info("  PlayOk opcode=0x#{Integer.to_string(opcode7, 16)} play_ok1=#{p1} play_ok2=#{p2} ✓")
+
+                    info(
+                      "  PlayOk opcode=0x#{Integer.to_string(opcode7, 16)} play_ok1=#{p1} play_ok2=#{p2} ✓"
+                    )
+
                     info("\n✅ Full login flow verified — connect game client to 127.0.0.1:7777")
 
                   {:error, :closed} ->
@@ -137,8 +156,8 @@ defmodule Mix.Tasks.LoginProbe do
 
   defp parse_init(
          <<0x00, session_id::little-32, protocol_version::little-32,
-           scrambled_modulus::binary-size(128), _unk::binary-size(16),
-           bf_key::binary-size(16), 0x00>>
+           scrambled_modulus::binary-size(128), _unk::binary-size(16), bf_key::binary-size(16),
+           0x00>>
        ) do
     {:ok,
      %{
@@ -150,7 +169,10 @@ defmodule Mix.Tasks.LoginProbe do
   end
 
   defp parse_init(bin) do
-    err("Init parse failed (#{byte_size(bin)} bytes). First 20 bytes: #{Base.encode16(binary_part(bin, 0, min(20, byte_size(bin))))}")
+    err(
+      "Init parse failed (#{byte_size(bin)} bytes). First 20 bytes: #{Base.encode16(binary_part(bin, 0, min(20, byte_size(bin))))}"
+    )
+
     {:error, :bad_init}
   end
 

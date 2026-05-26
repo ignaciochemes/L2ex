@@ -60,15 +60,15 @@ defmodule L2E.LoginServer.IpRateLimiter do
 
     # Query ETS for recent entries
     case :ets.select(@table, [
-      {
-        {:"$1", :"$2"},
-        [
-          {:==, :"$1", ip_str},
-          {:>, :"$2", cutoff_ms}
-        ],
-        [:"$2"]
-      }
-    ]) do
+           {
+             {:"$1", :"$2"},
+             [
+               {:==, :"$1", ip_str},
+               {:>, :"$2", cutoff_ms}
+             ],
+             [:"$2"]
+           }
+         ]) do
       [] ->
         # First entry
         :ets.insert(@table, {ip_str, now_ms})
@@ -78,8 +78,11 @@ defmodule L2E.LoginServer.IpRateLimiter do
         count = length(recent_timestamps)
 
         if count >= config.threshold do
-          Logger.warning("[IpRateLimiter] Rate limit exceeded for IP #{ip_str}: " <>
-            "#{count} requests in #{config.window_secs}s (threshold: #{config.threshold})")
+          Logger.warning(
+            "[IpRateLimiter] Rate limit exceeded for IP #{ip_str}: " <>
+              "#{count} requests in #{config.window_secs}s (threshold: #{config.threshold})"
+          )
+
           {:error, :rate_limit_exceeded}
         else
           # Add current timestamp

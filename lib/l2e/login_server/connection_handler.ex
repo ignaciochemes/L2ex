@@ -65,7 +65,9 @@ defmodule L2E.LoginServer.ConnectionHandler do
       client_ip: client_ip
     }
 
-    Logger.info("[LoginServer] New connection from #{inspect(client_ip)} — sending Init (session_id=#{session_id})")
+    Logger.info(
+      "[LoginServer] New connection from #{inspect(client_ip)} — sending Init (session_id=#{session_id})"
+    )
 
     case send_init(socket, session_id, scrambled_modulus, session_bf_key) do
       :ok -> Logger.info("[LoginServer] Init sent OK (#{170} bytes body, #{172} bytes total)")
@@ -78,7 +80,10 @@ defmodule L2E.LoginServer.ConnectionHandler do
 
   @impl ThousandIsland.Handler
   def handle_data(data, socket, state) do
-    Logger.info("[LoginServer] Received #{byte_size(data)} bytes from client (state=#{state.auth_state}, buffer_was=#{byte_size(state.buffer)})")
+    Logger.info(
+      "[LoginServer] Received #{byte_size(data)} bytes from client (state=#{state.auth_state}, buffer_was=#{byte_size(state.buffer)})"
+    )
+
     buffer = state.buffer <> data
     {packets, rest} = split_frames(buffer)
 
@@ -129,7 +134,10 @@ defmodule L2E.LoginServer.ConnectionHandler do
 
     case Crypto.decrypt(payload, state.bf_ctx) do
       {:ok, <<opcode::8, plain::binary>>} ->
-        Logger.info("[LoginServer] Decrypted OK — opcode=0x#{Integer.to_string(opcode, 16)} plain_size=#{byte_size(plain)}")
+        Logger.info(
+          "[LoginServer] Decrypted OK — opcode=0x#{Integer.to_string(opcode, 16)} plain_size=#{byte_size(plain)}"
+        )
+
         dispatch(opcode, plain, socket, state)
 
       {:ok, _} ->
@@ -137,7 +145,10 @@ defmodule L2E.LoginServer.ConnectionHandler do
         {:continue, state}
 
       {:error, reason} ->
-        Logger.warning("[LoginServer] Decrypt failed: #{reason} — payload_hex=#{Base.encode16(payload)}")
+        Logger.warning(
+          "[LoginServer] Decrypt failed: #{reason} — payload_hex=#{Base.encode16(payload)}"
+        )
+
         {:continue, state}
     end
   end
@@ -280,7 +291,10 @@ defmodule L2E.LoginServer.ConnectionHandler do
         blowfish_key: bf_key
       })
 
-    Logger.info("[LoginServer] send_init payload=#{byte_size(payload)} bytes (body), bf_key_hex=#{Base.encode16(bf_key)}")
+    Logger.info(
+      "[LoginServer] send_init payload=#{byte_size(payload)} bytes (body), bf_key_hex=#{Base.encode16(bf_key)}"
+    )
+
     result = send_raw(socket, payload)
     result
   end

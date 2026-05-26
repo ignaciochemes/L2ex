@@ -154,7 +154,14 @@ defmodule L2E.Olympiad.Manager do
       :ets.insert(@table, {{:points, loser_id}, max(0, loser_pts - points_delta)})
     end
 
-    # TODO: persist via L2E.DB.OlympiadHistory.insert/4 (Parker's schema)
+    # Persist match result
+    winner_reg = winner_id && Map.get(state.registrations, winner_id)
+    loser_reg = loser_id && Map.get(state.registrations, loser_id)
+    if winner_reg && loser_reg do
+      Task.start(fn ->
+        L2E.DB.OlympiadHistory.insert(1, winner_reg, loser_reg, points_delta)
+      end)
+    end
     {:noreply, state}
   end
 
