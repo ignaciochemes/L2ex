@@ -83,7 +83,6 @@ defmodule L2E.World.Region do
       ground_items: %{}
     }
 
-    Logger.debug("[Region] Started for grid #{inspect(grid)}")
     {:ok, state}
   end
 

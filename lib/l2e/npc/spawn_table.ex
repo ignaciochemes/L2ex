@@ -239,7 +239,7 @@ defmodule L2E.NPC.SpawnTable do
       case Supervisor.spawn_npc(opts) do
         {:ok, pid} ->
           Logger.debug(
-            "[SpawnTable] Spawned #{template.name} id=#{object_id} pid=#{inspect(pid)}"
+            "[SpawnTable] #{template.name} id=#{object_id} at #{inspect({x, y, z})} pid=#{inspect(pid)}"
           )
 
           {%{state | next_id: object_id + 1}, pid}

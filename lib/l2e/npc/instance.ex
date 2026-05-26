@@ -147,10 +147,6 @@ defmodule L2E.NPC.Instance do
         state
       end
 
-    Logger.debug(
-      "[NPC.Instance] #{template.name} (id=#{object_id}) spawned at #{inspect(position)}"
-    )
-
     {:ok, state}
   end
 
