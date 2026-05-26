@@ -2863,6 +2863,7 @@ defmodule L2E.Packet.Server.SendMacroList do
 
   def encode(%__MODULE__{revision: rev, macros: macros}) when is_list(macros) do
     count = length(macros)
+
     macro_bin =
       Enum.reduce(macros, <<>>, fn m, acc ->
         name_b = encode_utf16le(Map.get(m, :name, "") || "")

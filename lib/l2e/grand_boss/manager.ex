@@ -11,15 +11,15 @@ defmodule L2E.GrandBoss.Manager do
 
   # Boss IDs from L2J Mobius CT0 data
   @bosses %{
-    29022 => %{name: "Antharas",  respawn_min_h: 192, respawn_max_h: 200},
-    29028 => %{name: "Valakas",   respawn_min_h: 264, respawn_max_h: 280},
-    29020 => %{name: "Baium",     respawn_min_h: 121, respawn_max_h: 143},
-    29026 => %{name: "Zaken",     respawn_min_h: 60,  respawn_max_h: 84},
-    29006 => %{name: "Core",      respawn_min_h: 36,  respawn_max_h: 44},
-    29014 => %{name: "Orfen",     respawn_min_h: 36,  respawn_max_h: 44},
-    29001 => %{name: "Queen Ant", respawn_min_h: 19,  respawn_max_h: 35},
-    29045 => %{name: "Frintezza", respawn_min_h: 48,  respawn_max_h: 52},
-    29046 => %{name: "Sailren",   respawn_min_h: 12,  respawn_max_h: 36}
+    29022 => %{name: "Antharas", respawn_min_h: 192, respawn_max_h: 200},
+    29028 => %{name: "Valakas", respawn_min_h: 264, respawn_max_h: 280},
+    29020 => %{name: "Baium", respawn_min_h: 121, respawn_max_h: 143},
+    29026 => %{name: "Zaken", respawn_min_h: 60, respawn_max_h: 84},
+    29006 => %{name: "Core", respawn_min_h: 36, respawn_max_h: 44},
+    29014 => %{name: "Orfen", respawn_min_h: 36, respawn_max_h: 44},
+    29001 => %{name: "Queen Ant", respawn_min_h: 19, respawn_max_h: 35},
+    29045 => %{name: "Frintezza", respawn_min_h: 48, respawn_max_h: 52},
+    29046 => %{name: "Sailren", respawn_min_h: 12, respawn_max_h: 36}
   }
 
   # State: %{boss_id => %{state: :alive | :dead | :waiting, respawn_at: DateTime | nil}}

@@ -1371,7 +1371,11 @@ defmodule L2E.Session.PlayerSession do
       )
 
     if current_zone == zone_type and state.hp > 0 do
-      damage = if zone_type == :damage, do: max(1, div(state.max_hp, 20)), else: max(1, div(state.max_hp, 50))
+      damage =
+        if zone_type == :damage,
+          do: max(1, div(state.max_hp, 20)),
+          else: max(1, div(state.max_hp, 50))
+
       new_hp = max(0, state.hp - damage)
       tick_ms = if zone_type == :damage, do: 2000, else: 4000
       timer = Process.send_after(self(), {:zone_damage_tick, zone_type}, tick_ms)
@@ -1751,10 +1755,15 @@ defmodule L2E.Session.PlayerSession do
     send(state.conn_pid, {:send_packet, %Server.FriendList{friends: []}})
 
     # M74-A: Load macros
-    macros = L2E.Repo.all(
-      from(m in CharacterMacro, where: m.character_id == ^state.char_id, order_by: m.macro_id)
+    macros =
+      L2E.Repo.all(
+        from(m in CharacterMacro, where: m.character_id == ^state.char_id, order_by: m.macro_id)
+      )
+
+    send(
+      state.conn_pid,
+      {:send_packet, %L2E.Packet.Server.SendMacroList{revision: 0, macros: macros}}
     )
-    send(state.conn_pid, {:send_packet, %L2E.Packet.Server.SendMacroList{revision: 0, macros: macros}})
 
     Logger.info(
       "[PlayerSession] #{char_name} (id=#{char_id}) entered the world (class=#{state.class_id}, level=#{state.level})"
@@ -3695,14 +3704,23 @@ defmodule L2E.Session.PlayerSession do
       icon: pkt.icon,
       commands: pkt.commands
     }
+
     changeset = CharacterMacro.changeset(%CharacterMacro{}, attrs)
+
     case L2E.Repo.insert(changeset,
            on_conflict: {:replace, [:name, :descr, :keybind, :icon, :commands]},
-           conflict_target: [:character_id, :macro_id]) do
+           conflict_target: [:character_id, :macro_id]
+         ) do
       {:ok, macro} ->
         new_macros = Enum.reject(state.macros, &(&1.macro_id == macro.macro_id)) ++ [macro]
-        send(state.conn_pid, {:send_packet, %L2E.Packet.Server.SendMacroList{revision: 1, macros: new_macros}})
+
+        send(
+          state.conn_pid,
+          {:send_packet, %L2E.Packet.Server.SendMacroList{revision: 1, macros: new_macros}}
+        )
+
         {:noreply, %{state | macros: new_macros}}
+
       {:error, _cs} ->
         {:noreply, state}
     end
@@ -3712,8 +3730,14 @@ defmodule L2E.Session.PlayerSession do
     L2E.Repo.delete_all(
       from(m in CharacterMacro, where: m.character_id == ^state.char_id and m.macro_id == ^mid)
     )
+
     new_macros = Enum.reject(state.macros, &(&1.macro_id == mid))
-    send(state.conn_pid, {:send_packet, %L2E.Packet.Server.SendMacroList{revision: 1, macros: new_macros}})
+
+    send(
+      state.conn_pid,
+      {:send_packet, %L2E.Packet.Server.SendMacroList{revision: 1, macros: new_macros}}
+    )
+
     {:noreply, %{state | macros: new_macros}}
   end
 

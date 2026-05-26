@@ -54,25 +54,25 @@ defmodule L2E.Zone do
   @spec classify_type(String.t()) :: zone_type()
   def classify_type(type_str) do
     case type_str do
-      "PeaceZone"            -> :peace
-      "TownZone"             -> :peace
-      "ArenaZone"            -> :pvp
-      "NoPvPZone"            -> :no_pvp
-      "SiegeZone"            -> :siege
-      "CastleZone"           -> :siege
-      "SiegableHallZone"     -> :siege
-      "DamageZone"           -> :damage
-      "SwampZone"            -> :swamp
-      "WaterZone"            -> :water
-      "BossZone"             -> :boss
-      "JailZone"             -> :peace
-      "OlympiadStadiumZone"  -> :pvp
-      "ConditionZone"        -> :other
-      "FishingZone"          -> :other
-      "NoStoreZone"          -> :other
-      "ClanHallZone"         -> :other
-      "RespawnZone"          -> :other
-      _                      -> :other
+      "PeaceZone" -> :peace
+      "TownZone" -> :peace
+      "ArenaZone" -> :pvp
+      "NoPvPZone" -> :no_pvp
+      "SiegeZone" -> :siege
+      "CastleZone" -> :siege
+      "SiegableHallZone" -> :siege
+      "DamageZone" -> :damage
+      "SwampZone" -> :swamp
+      "WaterZone" -> :water
+      "BossZone" -> :boss
+      "JailZone" -> :peace
+      "OlympiadStadiumZone" -> :pvp
+      "ConditionZone" -> :other
+      "FishingZone" -> :other
+      "NoStoreZone" -> :other
+      "ClanHallZone" -> :other
+      "RespawnZone" -> :other
+      _ -> :other
     end
   end
 

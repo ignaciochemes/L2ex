@@ -25,13 +25,15 @@ defmodule L2E.SevenSigns.Manager do
   @topic "world:ssq"
 
   defstruct [
-    :current_period,    # 1 = Competition, 2 = Seal Validation
+    # 1 = Competition, 2 = Seal Validation
+    :current_period,
     :current_cycle,
     :dawn_score,
     :dusk_score,
     :dawn_stones,
     :dusk_stones,
-    :seal_avarice,      # :dawn | :dusk | :none
+    # :dawn | :dusk | :none
+    :seal_avarice,
     :seal_gnosis,
     :seal_strife,
     :period_timer
@@ -58,7 +60,8 @@ defmodule L2E.SevenSigns.Manager do
   # ─── Init ─────────────────────────────────────────────────────────────────
 
   def init(:ok) do
-    period_ms = Application.get_env(:l2e, :ssq_period_ms, 3_600_000)  # 1 hour default
+    # 1 hour default
+    period_ms = Application.get_env(:l2e, :ssq_period_ms, 3_600_000)
     timer = Process.send_after(self(), :period_transition, period_ms)
 
     state = %__MODULE__{
@@ -89,7 +92,8 @@ defmodule L2E.SevenSigns.Manager do
   end
 
   def handle_call(:get_seals, _from, state) do
-    {:reply, %{avarice: state.seal_avarice, gnosis: state.seal_gnosis, strife: state.seal_strife}, state}
+    {:reply, %{avarice: state.seal_avarice, gnosis: state.seal_gnosis, strife: state.seal_strife},
+     state}
   end
 
   # ─── Casts ────────────────────────────────────────────────────────────────
@@ -99,6 +103,7 @@ defmodule L2E.SevenSigns.Manager do
     if state.current_period == 1 do
       Phoenix.PubSub.broadcast(L2E.PubSub, @topic, {:ssq_cabal_registered, char_id, cabal})
     end
+
     {:noreply, state}
   end
 
@@ -108,10 +113,12 @@ defmodule L2E.SevenSigns.Manager do
         "dawn" ->
           new_state = update_stones(state, :dawn, stone_type, stone_count)
           %{new_state | dawn_score: new_state.dawn_score + score}
+
         "dusk" ->
           new_state = update_stones(state, :dusk, stone_type, stone_count)
           %{new_state | dusk_score: new_state.dusk_score + score}
       end
+
     {:noreply, state}
   end
 
@@ -131,14 +138,17 @@ defmodule L2E.SevenSigns.Manager do
           # Seal Validation ended → award seals, reset scores, new cycle
           next_cycle = state.current_cycle + 1
           new_state = award_seals(state)
-          new_state = %{new_state |
-            current_period: 1,
-            current_cycle: next_cycle,
-            dawn_score: 0,
-            dusk_score: 0,
-            dawn_stones: 0,
-            dusk_stones: 0
+
+          new_state = %{
+            new_state
+            | current_period: 1,
+              current_cycle: next_cycle,
+              dawn_score: 0,
+              dusk_score: 0,
+              dawn_stones: 0,
+              dusk_stones: 0
           }
+
           {1, next_cycle, new_state}
       end
 
@@ -165,12 +175,12 @@ defmodule L2E.SevenSigns.Manager do
 
   defp update_stones(state, cabal, stone_type, count) do
     case {cabal, stone_type} do
-      {:dawn, :blue}  -> %{state | dawn_stones: state.dawn_stones + count}
+      {:dawn, :blue} -> %{state | dawn_stones: state.dawn_stones + count}
       {:dawn, :green} -> %{state | dawn_stones: state.dawn_stones + count}
-      {:dawn, :red}   -> %{state | dawn_stones: state.dawn_stones + count}
-      {:dusk, :blue}  -> %{state | dusk_stones: state.dusk_stones + count}
+      {:dawn, :red} -> %{state | dawn_stones: state.dawn_stones + count}
+      {:dusk, :blue} -> %{state | dusk_stones: state.dusk_stones + count}
       {:dusk, :green} -> %{state | dusk_stones: state.dusk_stones + count}
-      {:dusk, :red}   -> %{state | dusk_stones: state.dusk_stones + count}
+      {:dusk, :red} -> %{state | dusk_stones: state.dusk_stones + count}
       _ -> state
     end
   end

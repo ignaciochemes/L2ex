@@ -7,18 +7,20 @@ defmodule L2E.Packet.Client.RequestMakeMacro do
          {:ok, descr, r2} <- read_utf16le_str(r1),
          {:ok, keybind, r3} <- read_utf16le_str(r2),
          <<icon::8, cmd_count::8, _rest2::binary>> <- r3 do
-      {:ok, %__MODULE__{
-        macro_id: macro_id,
-        name: name,
-        descr: descr,
-        keybind: keybind,
-        icon: icon,
-        commands: "count:#{cmd_count}"
-      }}
+      {:ok,
+       %__MODULE__{
+         macro_id: macro_id,
+         name: name,
+         descr: descr,
+         keybind: keybind,
+         icon: icon,
+         commands: "count:#{cmd_count}"
+       }}
     else
       _ -> {:error, :invalid}
     end
   end
+
   def decode(_), do: {:error, :invalid}
 
   defp read_utf16le_str(<<len::little-16, rest::binary>>) when byte_size(rest) >= len * 2 do
@@ -27,5 +29,6 @@ defmodule L2E.Packet.Client.RequestMakeMacro do
     str = :unicode.characters_to_binary(chars, {:utf16, :little}, :utf8)
     {:ok, str, tail}
   end
+
   defp read_utf16le_str(_), do: :error
 end
