@@ -99,6 +99,16 @@ defmodule L2E.NPC.Instance do
     GenServer.cast(pid, {:add_hate, player_pid, amount})
   end
 
+  @doc "Mark this NPC as spoiled by the given char_id. No-op if already dead or spoiled."
+  def apply_spoil(npc_pid, char_id) do
+    GenServer.cast(npc_pid, {:apply_spoil, char_id})
+  end
+
+  @doc "Collect sweep drops. Returns {:ok, drops} or {:error, reason}."
+  def sweep(npc_pid, char_id) do
+    GenServer.call(npc_pid, {:sweep, char_id})
+  end
+
   # -----------------------------------------------------------------------
   # GenServer init
   # -----------------------------------------------------------------------
@@ -136,7 +146,12 @@ defmodule L2E.NPC.Instance do
       skill_chance: template.skill_chance || 0.15,
       skills: template.skills || [],
       wander_timer: nil,
-      wander_radius: template.wander_radius || 200
+      wander_radius: template.wander_radius || 200,
+      # M77: Spoil — char_id of the player who used Spoil skill, nil if not spoiled
+      spoiled_by: nil,
+      # M80: Fear CC state
+      feared: false,
+      fear_timer: nil
     }
 
     state =
@@ -172,6 +187,21 @@ defmodule L2E.NPC.Instance do
     }
 
     {:reply, stats, state}
+  end
+
+  # M77: Sweep — collect spoil drops (caller must be the one who spoiled)
+  def handle_call({:sweep, char_id}, _from, state) do
+    cond do
+      state.ai_state != :dead ->
+        {:reply, {:error, :not_dead}, state}
+
+      state.spoiled_by != char_id ->
+        {:reply, {:error, :not_your_spoil}, state}
+
+      true ->
+        drops = generate_sweep_drops(state.template)
+        {:reply, {:ok, drops}, %{state | spoiled_by: nil}}
+    end
   end
 
   def handle_call(:get_info, _from, state) do
@@ -275,6 +305,17 @@ defmodule L2E.NPC.Instance do
     if state.stun_timer, do: Process.cancel_timer(state.stun_timer)
     timer = Process.send_after(self(), :stun_expired, duration_ms)
     {:noreply, %{state | stunned: true, stun_timer: timer}}
+  end
+
+  # M77: Spoil — mark this NPC as spoiled by char_id
+  def handle_cast({:apply_spoil, _char_id}, %{ai_state: :dead} = state), do: {:noreply, state}
+
+  def handle_cast({:apply_spoil, _char_id}, %{spoiled_by: existing} = state)
+      when existing != nil,
+      do: {:noreply, state}
+
+  def handle_cast({:apply_spoil, char_id}, state) do
+    {:noreply, %{state | spoiled_by: char_id}}
   end
 
   def handle_cast({:apply_cc, _cc_type, _duration_ms}, state), do: {:noreply, state}
@@ -506,6 +547,24 @@ defmodule L2E.NPC.Instance do
 
   def handle_info(:wander_tick, state), do: {:noreply, state}
 
+  # M80: Fear applied to this NPC — clear current target and enter fear state
+  def handle_info({:apply_fear, _duration, _from_char_id}, %{ai_state: :dead} = state),
+    do: {:noreply, state}
+
+  def handle_info({:apply_fear, duration, _from_char_id}, state) do
+    if state.fear_timer, do: Process.cancel_timer(state.fear_timer)
+    timer = Process.send_after(self(), :fear_expired, duration)
+    {:noreply, %{state | target_pid: nil, feared: true, fear_timer: timer}}
+  end
+
+  # M80: Fear timer expired — resume normal AI
+  def handle_info(:fear_expired, state) do
+    {:noreply, %{state | feared: false, fear_timer: nil}}
+  end
+
+  # M80: Dispel buffs — NPCs have no buff system, no-op
+  def handle_info({:dispel_buffs, _count}, state), do: {:noreply, state}
+
   def handle_info(msg, state) do
     Logger.debug("[NPC.Instance] Unexpected: #{inspect(msg)}")
     {:noreply, state}
@@ -594,8 +653,8 @@ defmodule L2E.NPC.Instance do
     cancel_timer(state.attack_timer)
     cancel_timer(state.leash_timer)
 
-    # Broadcast Die to region
-    die_packet = %Server.Die{object_id: state.object_id, can_sweep: false}
+    # Broadcast Die to region (can_sweep = true if this NPC has been spoiled)
+    die_packet = %Server.Die{object_id: state.object_id, can_sweep: state.spoiled_by != nil}
     broadcast_to_region(state, die_packet)
 
     # M18: Drop items as ground items in the region (visible to all players)
@@ -668,6 +727,15 @@ defmodule L2E.NPC.Instance do
     }
 
     GenServer.call(region_pid, {:npc_enter, self(), object_id, npc_info})
+  end
+
+  # M77: Generate sweep drops from the template sweep_drops list
+  defp generate_sweep_drops(template) do
+    sweep_drops = Map.get(template, :sweep_drops, [])
+
+    Enum.flat_map(sweep_drops, fn %{item_id: item_id, count: count, chance: chance} ->
+      if :rand.uniform(100) <= chance, do: [%{item_id: item_id, count: count}], else: []
+    end)
   end
 
   defp broadcast_to_region(%{region_pid: nil}, _packet), do: :ok

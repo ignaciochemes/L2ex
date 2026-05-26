@@ -78,6 +78,26 @@ defmodule L2E.Admin.Dispatcher do
     L2E.Admin.Commands.Invisible.execute(player_pid)
   end
 
+  defp do_dispatch("give_item", args, player_pid, access_level) when access_level > 0 do
+    L2E.Admin.Commands.GiveItem.execute(player_pid, args)
+  end
+
+  defp do_dispatch("announce", args, _player_pid, access_level) when access_level > 0 do
+    L2E.Admin.Commands.Announce.execute(args)
+  end
+
+  defp do_dispatch("heal", args, player_pid, access_level) when access_level > 0 do
+    L2E.Admin.Commands.Heal.execute(player_pid, args)
+  end
+
+  defp do_dispatch("ban_char", args, _player_pid, access_level) when access_level >= 100 do
+    L2E.Admin.Commands.BanChar.execute(args)
+  end
+
+  defp do_dispatch("reload", args, _player_pid, access_level) when access_level >= 100 do
+    L2E.Admin.Commands.Reload.execute(args)
+  end
+
   # Unknown command or insufficient access
   defp do_dispatch(cmd, _args, _player_pid, access_level) do
     {:error, "Unknown command '#{cmd}' or insufficient access (level: #{access_level})"}

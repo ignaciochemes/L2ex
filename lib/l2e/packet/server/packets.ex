@@ -2841,6 +2841,30 @@ defmodule L2E.Packet.Server.ExDuelEnd do
   end
 end
 
+defmodule L2E.Packet.Server.ExDuelUpdateUserInfo do
+  @moduledoc """
+  0xFE/0x4F — Updates HP/CP display for duel participants.
+  Sent to both players whenever one takes damage during a duel.
+  """
+  @behaviour L2E.Packet.Encodable
+
+  defstruct [:char_name, :hp, :max_hp, :cp, :max_cp]
+
+  @impl L2E.Packet.Encodable
+  def encode(%__MODULE__{char_name: char_name, hp: hp, max_hp: max_hp, cp: cp, max_cp: max_cp}) do
+    name_bytes = encode_utf16le(char_name || "")
+
+    <<0xFE::8, 0x4F::little-16,
+      byte_size(name_bytes) + 2::little-32, name_bytes::binary, 0, 0,
+      trunc(hp || 0)::little-32, trunc(max_hp || 0)::little-32,
+      trunc(cp || 0)::little-32, trunc(max_cp || 0)::little-32>>
+  end
+
+  defp encode_utf16le(str) do
+    :unicode.characters_to_binary(str, :utf8, {:utf16, :little})
+  end
+end
+
 # ---- FASE 3: Olympiad Mode ---------------------------------------------------
 
 defmodule L2E.Packet.Server.ExOlympiadMode do
@@ -2975,5 +2999,43 @@ defmodule L2E.Packet.Server.ExOlympiadMatchResult do
 
   defp encode_utf16le(str) do
     :unicode.characters_to_binary(str, :utf8, {:utf16, :little}) <> <<0::16>>
+  end
+end
+
+# ---------------------------------------------------------------------------
+# M76: ExHeroList (0xFE/0x24) — sends the full hero list to the client.
+# Sent on world entry and after each olympiad cycle.
+#
+# Binary layout (little-endian):
+#   0xFE(8)  sub_opcode(16LE=0x0024)  count(32LE)
+#   per hero: class_id(32LE)  name_byte_len+2(32LE)  name(utf16le)  null(16)  1(32LE)
+# ---------------------------------------------------------------------------
+defmodule L2E.Packet.Server.ExHeroList do
+  @moduledoc """
+  Packet 0xFE / 0x24 — Sends the full hero list to the client.
+  Sent on world entry and after each olympiad cycle.
+  """
+  @behaviour L2E.Packet.Encodable
+
+  defstruct [:heroes]
+
+  @impl L2E.Packet.Encodable
+  def encode(%__MODULE__{heroes: heroes}) do
+    count = length(heroes)
+
+    entries =
+      Enum.map(heroes, fn h ->
+        name_utf16 = encode_utf16le(Map.get(h, :char_name, ""))
+        class_id = Map.get(h, :class_id, 0)
+
+        <<class_id::little-32, byte_size(name_utf16) + 2::little-32, name_utf16::binary, 0, 0,
+          1::little-32>>
+      end)
+
+    <<0xFE::8, 0x0024::little-16, count::little-32, IO.iodata_to_binary(entries)::binary>>
+  end
+
+  defp encode_utf16le(str) do
+    :unicode.characters_to_binary(str, :utf8, {:utf16, :little})
   end
 end

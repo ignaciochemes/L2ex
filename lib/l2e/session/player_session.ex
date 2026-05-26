@@ -195,6 +195,12 @@ defmodule L2E.Session.PlayerSession do
       silence_timer: nil,
       # M49-B: Stat modifier buffs/debuffs (list of %{skill_id, stat, type, value, timer})
       stat_mods: [],
+      # M80: Fear CC state
+      feared: false,
+      fear_timer: nil,
+      # M80: Fake death state
+      fake_death: false,
+      fake_death_timer: nil,
       # M54: Shortcut bar — list of %{slot, page, type, shortcut_id, level}
       shortcuts: [],
       # M56: Henna/tattoo slots — %{1..3 => henna_id | nil}
@@ -221,7 +227,9 @@ defmodule L2E.Session.PlayerSession do
       # M80: Pending dialog confirmation state — {:enchant_confirm, item_oid, scroll_oid} | nil
       pending_dialog: nil,
       # M81: Block list — MapSet of blocked player names
-      block_list: MapSet.new()
+      block_list: MapSet.new(),
+      # M76: Hero status
+      is_hero: false
     }
 
     {:ok, state}
@@ -253,7 +261,17 @@ defmodule L2E.Session.PlayerSession do
 
   # Player receives damage from NPC
   def handle_cast({:take_damage, amount, from_pid}, %{dead: false} = state) do
-    new_hp = max(0.0, state.hp - amount)
+    raw_hp = state.hp - amount
+
+    # In a duel, prevent actual death: clamp HP at 1 and notify duel session
+    new_hp =
+      if state.active_duel_id && raw_hp <= 0 do
+        L2E.Duel.Session.player_died(state.active_duel_id, state.char_id)
+        1.0
+      else
+        max(0.0, raw_hp)
+      end
+
     new_state = %{state | hp: new_hp}
 
     hp_update = Server.StatusUpdate.hp_mp(state.char_id, new_hp, state.mp)
@@ -261,6 +279,17 @@ defmodule L2E.Session.PlayerSession do
 
     # Broadcast vitals update to party window
     if state.party_pid, do: Party.vital_update(state.party_pid, state.char_id, new_hp, state.mp)
+
+    # Broadcast HP update to both duel participants
+    if state.active_duel_id do
+      Phoenix.PubSub.broadcast(L2E.PubSub, "duel:#{state.active_duel_id}", {:duel_hp_update, %{
+        char_name: state.char_name,
+        hp: new_hp,
+        max_hp: state.max_hp,
+        cp: state.cp,
+        max_cp: state.max_cp
+      }})
+    end
 
     # Flag attacker if they are another player
     if is_pid(from_pid) and player_pid?(from_pid) do
@@ -1099,6 +1128,143 @@ defmodule L2E.Session.PlayerSession do
                   buffs: new_buffs
               }
 
+            # M77: Spoil — mark the target NPC so it yields sweep drops on death
+            :spoil ->
+              if state.target_id do
+                if npc_pid = find_npc_pid(state.target_id) do
+                  L2E.NPC.Instance.apply_spoil(npc_pid, state.char_id)
+                end
+              end
+
+              %{state | mp: new_mp, cooldowns: new_cooldowns, casting: false, cast_timer: nil}
+
+            # M80: HP drain — magic damage + heal caster for a portion of damage dealt
+            :hp_drain ->
+              caster_stats = player_combat_stats(state)
+              target_stats = get_target_stats(target_id, state)
+              %{damage: dmg, healed: healed} = Effect.apply_hp_drain(caster_stats, target_stats, template.power)
+              deal_damage_to_target(target_id, dmg, state)
+              new_hp = min(state.max_hp, state.hp + healed)
+
+              send(
+                state.conn_pid,
+                {:send_packet, Server.StatusUpdate.hp_mp(state.char_id, new_hp, new_mp)}
+              )
+
+              %{state | hp: new_hp, mp: new_mp, cooldowns: new_cooldowns, casting: false, cast_timer: nil}
+
+            # M80: Fear — CC that sends apply_fear to target (NPC or player)
+            :fear ->
+              caster_stats = player_combat_stats(state)
+              target_stats = get_target_stats(target_id, state)
+
+              if Effect.check_cc_lands?(caster_stats, target_stats) do
+                duration = Effect.fear_duration(target_stats, template.buff_duration_ms || 10_000)
+
+                case find_npc_pid(target_id) do
+                  nil ->
+                    case Registry.lookup(L2E.Session.Registry, target_id) do
+                      [{pid, _}] -> send(pid, {:apply_fear, duration, state.char_id})
+                      [] -> :ok
+                    end
+
+                  npc_pid ->
+                    send(npc_pid, {:apply_fear, duration, state.char_id})
+                end
+              end
+
+              %{state | mp: new_mp, cooldowns: new_cooldowns, casting: false, cast_timer: nil}
+
+            # M80: Paralyze — same CC system as stun/root, MEN-scaled duration
+            :paralyze ->
+              caster_stats = player_combat_stats(state)
+              target_stats = get_target_stats(target_id, state)
+
+              if Effect.check_cc_lands?(caster_stats, target_stats) do
+                duration = Effect.paralyze_duration(target_stats, template.buff_duration_ms || 8_000)
+                apply_cc_to_target(target_id, :paralyzed, duration, state)
+              end
+
+              %{state | mp: new_mp, cooldowns: new_cooldowns, casting: false, cast_timer: nil}
+
+            # M80: Dispel — strip buffs from target
+            :dispel ->
+              if state.target_id do
+                count = Effect.dispel_count(template.power)
+
+                case find_npc_pid(state.target_id) do
+                  nil ->
+                    case Registry.lookup(L2E.Session.Registry, state.target_id) do
+                      [{pid, _}] -> send(pid, {:dispel_buffs, count})
+                      [] -> :ok
+                    end
+
+                  npc_pid ->
+                    send(npc_pid, {:dispel_buffs, count})
+                end
+              end
+
+              %{state | mp: new_mp, cooldowns: new_cooldowns, casting: false, cast_timer: nil}
+
+            # M80: Aggression — add hate to target NPC
+            :aggression ->
+              if state.target_id do
+                if npc_pid = find_npc_pid(state.target_id) do
+                  caster_stats = player_combat_stats(state)
+                  hate_value = Effect.aggression_value(caster_stats, template.power)
+                  L2E.NPC.Instance.add_hate(npc_pid, self(), hate_value)
+                end
+              end
+
+              %{state | mp: new_mp, cooldowns: new_cooldowns, casting: false, cast_timer: nil}
+
+            # M80: Noblesse Blessing — flat-duration buff with no stat mods
+            :noblesse_blessing ->
+              duration = Effect.noblesse_blessing_duration(template.buff_duration_ms || 1_800_000)
+
+              buff = %BuffInfo{
+                skill_id: skill_id,
+                level: level,
+                skill_name: template.name,
+                caster_id: state.char_id,
+                start_monotonic: now_ms,
+                duration_ms: duration,
+                stat_bonus: %{}
+              }
+
+              new_buffs = [buff | Enum.reject(state.buffs, &(&1.skill_id == skill_id))]
+              Process.send_after(self(), {:buff_expired, skill_id}, duration)
+              abn_pkt = %Server.AbnormalStatusUpdate{effects: new_buffs}
+              send(state.conn_pid, {:send_packet, abn_pkt})
+
+              %{
+                state
+                | buffs: new_buffs,
+                  mp: new_mp,
+                  cooldowns: new_cooldowns,
+                  casting: false,
+                  cast_timer: nil
+              }
+
+            # M80: Fake death — toggle dead-looking state so NPCs ignore the player
+            :fake_death ->
+              if Effect.fake_death_lands?() do
+                if state.fake_death_timer, do: Process.cancel_timer(state.fake_death_timer)
+                timer = Process.send_after(self(), :fake_death_expired, template.buff_duration_ms || 60_000)
+
+                %{
+                  state
+                  | mp: new_mp,
+                    cooldowns: new_cooldowns,
+                    casting: false,
+                    cast_timer: nil,
+                    fake_death: true,
+                    fake_death_timer: timer
+                }
+              else
+                %{state | mp: new_mp, cooldowns: new_cooldowns, casting: false, cast_timer: nil}
+              end
+
             _ ->
               %{state | mp: new_mp, cooldowns: new_cooldowns, casting: false, cast_timer: nil}
           end
@@ -1339,6 +1505,7 @@ defmodule L2E.Session.PlayerSession do
   end
 
   def handle_info({:duel_start, duel_id, party_duel}, state) do
+    Phoenix.PubSub.subscribe(L2E.PubSub, "duel:#{duel_id}")
     send(state.conn_pid, {:send_packet, %Server.ExDuelReady{party_duel: party_duel}})
     send(state.conn_pid, {:send_packet, %Server.ExDuelStart{party_duel: party_duel}})
     {:noreply, %{state | active_duel_id: duel_id, pending_duel: nil}}
@@ -1347,6 +1514,23 @@ defmodule L2E.Session.PlayerSession do
   def handle_info({:duel_end, party_duel}, state) do
     send(state.conn_pid, {:send_packet, %Server.ExDuelEnd{party_duel: party_duel}})
     {:noreply, %{state | active_duel_id: nil}}
+  end
+
+  def handle_info({:duel_event, :duel_ended, duel_id, _result, _reason}, state) do
+    Phoenix.PubSub.unsubscribe(L2E.PubSub, "duel:#{duel_id}")
+    send(state.conn_pid, {:send_packet, %Server.ExDuelEnd{party_duel: false}})
+    {:noreply, %{state | active_duel_id: nil}}
+  end
+
+  def handle_info({:duel_hp_update, data}, state) do
+    send(state.conn_pid, {:send_packet, %Server.ExDuelUpdateUserInfo{
+      char_name: data.char_name,
+      hp: data.hp,
+      max_hp: data.max_hp,
+      cp: data.cp,
+      max_cp: data.max_cp
+    }})
+    {:noreply, state}
   end
 
   # ---- M72: Pet handle_info --------------------------------------------------
@@ -1367,6 +1551,26 @@ defmodule L2E.Session.PlayerSession do
   # M49-B: Silence timer expired
   def handle_info({:silence_expired}, state) do
     {:noreply, %{state | silenced: false, silence_timer: nil}}
+  end
+
+  # M80: Fear applied to this player by another entity
+  def handle_info({:apply_fear, duration, _from_char_id}, state) do
+    if state.feared do
+      {:noreply, state}
+    else
+      timer = Process.send_after(self(), :fear_expired, duration)
+      {:noreply, %{state | feared: true, fear_timer: timer}}
+    end
+  end
+
+  # M80: Fear timer expired
+  def handle_info(:fear_expired, state) do
+    {:noreply, %{state | feared: false, fear_timer: nil}}
+  end
+
+  # M80: Fake death timer expired
+  def handle_info(:fake_death_expired, state) do
+    {:noreply, %{state | fake_death: false, fake_death_timer: nil}}
   end
 
   # M55-B: Zone damage tick
@@ -1492,6 +1696,14 @@ defmodule L2E.Session.PlayerSession do
   def handle_info({:pet_died}, state) do
     if state.pet_pid, do: Process.exit(state.pet_pid, :normal)
     {:noreply, %{state | pet_pid: nil, pet_item_obj_id: nil}}
+  end
+
+  # ---- M76: Hero election broadcast ------------------------------------------
+
+  def handle_info({:heroes_elected, heroes}, state) do
+    is_hero = Enum.any?(heroes, fn h -> h.char_id == state.char_id end)
+    send(state.conn_pid, {:send_packet, %L2E.Packet.Server.ExHeroList{heroes: heroes}})
+    {:noreply, %{state | is_hero: is_hero}}
   end
 
   def handle_info(msg, state) do
@@ -1866,6 +2078,12 @@ defmodule L2E.Session.PlayerSession do
       {:send_packet, %L2E.Packet.Server.SendMacroList{revision: 0, macros: macros}}
     )
 
+    # M76: Subscribe to hero election broadcasts and send current hero list
+    Phoenix.PubSub.subscribe(L2E.PubSub, "world:olympiad")
+    heroes = L2E.DB.Hero.active_heroes()
+    is_hero = Enum.any?(heroes, fn h -> h.char_id == char_id end)
+    send(state.conn_pid, {:send_packet, %L2E.Packet.Server.ExHeroList{heroes: heroes}})
+
     Logger.info(
       "[PlayerSession] #{char_name} (id=#{char_id}) entered the world (class=#{state.class_id}, level=#{state.level})"
     )
@@ -1879,7 +2097,8 @@ defmodule L2E.Session.PlayerSession do
          shortcuts: shortcuts,
          macros: macros,
          regen_timer: regen_timer,
-         save_timer: save_timer
+         save_timer: save_timer,
+         is_hero: is_hero
      }}
   end
 
@@ -2548,6 +2767,46 @@ defmodule L2E.Session.PlayerSession do
   end
 
   defp handle_packet(%L2E.Packet.Client.RequestPickUpItem{}, state), do: {:noreply, state}
+
+  # ---- M77: RequestSweep (0x42) — collect spoil drops from a dead NPC ----
+
+  defp handle_packet(
+         %L2E.Packet.Client.RequestSweep{target_id: target_id},
+         %{auth_state: :in_world} = state
+       ) do
+    npc_pid = find_npc_pid(target_id)
+
+    if npc_pid do
+      case L2E.NPC.Instance.sweep(npc_pid, state.char_id) do
+        {:ok, []} ->
+          {:noreply, state}
+
+        {:ok, drops} ->
+          Enum.each(drops, fn %{item_id: item_id, count: count} ->
+            case Inventory.add_item(state.char_id, item_id, count) do
+              {:ok, change_type, {instance, template}} ->
+                change_int = change_type_to_int(change_type)
+                pkt = %Server.InventoryUpdate{changes: [{change_int, instance, template}]}
+                send(state.conn_pid, {:send_packet, pkt})
+
+              {:error, reason} ->
+                Logger.warning(
+                  "[PlayerSession] Sweep add_item failed item_id=#{item_id}: #{inspect(reason)}"
+                )
+            end
+          end)
+
+          {:noreply, state}
+
+        {:error, _reason} ->
+          {:noreply, state}
+      end
+    else
+      {:noreply, state}
+    end
+  end
+
+  defp handle_packet(%L2E.Packet.Client.RequestSweep{}, state), do: {:noreply, state}
 
   # ---- M16: NPC Interaction via Action (0x04) + Bypass (0x21) ------------
 
@@ -3987,10 +4246,12 @@ defmodule L2E.Session.PlayerSession do
       case OlympiadManager.register(state.char_id, state.char_name, state.class_id, self()) do
         :ok ->
           send(state.conn_pid, {:send_packet, %Server.ExOlympiadMode{mode: 3}})
+
         {:error, :already_registered} ->
           send(state.conn_pid, {:send_packet, %Server.ExOlympiadMode{mode: 0}})
       end
     end
+
     {:noreply, state}
   end
 
@@ -4006,20 +4267,27 @@ defmodule L2E.Session.PlayerSession do
       attackers = SiegeManager.get_attackers(castle.id)
       clan_name = if castle.owner_clan_id, do: "(clan #{castle.owner_clan_id})", else: ""
       siege_time = if castle.siege_date, do: DateTime.to_unix(castle.siege_date), else: 0
-      send(state.conn_pid, {:send_packet, %Server.SiegeInfo{
-        residence_id: castle.id,
-        show_controls: 0,
-        owner_id: castle.owner_clan_id || 0,
-        clan_name: clan_name,
-        leader_name: "",
-        ally_id: 0,
-        ally_name: "",
-        current_time: System.os_time(:second),
-        siege_time: siege_time,
-        siege_times: []
-      }})
+
+      send(
+        state.conn_pid,
+        {:send_packet,
+         %Server.SiegeInfo{
+           residence_id: castle.id,
+           show_controls: 0,
+           owner_id: castle.owner_clan_id || 0,
+           clan_name: clan_name,
+           leader_name: "",
+           ally_id: 0,
+           ally_name: "",
+           current_time: System.os_time(:second),
+           siege_time: siege_time,
+           siege_times: []
+         }}
+      )
+
       _ = attackers
     end)
+
     {:noreply, state}
   end
 
@@ -4039,9 +4307,14 @@ defmodule L2E.Session.PlayerSession do
 
     case result do
       :ok ->
-        Logger.info("[PlayerSession] #{state.char_name} joined siege #{castle_id} as #{if is_attacker, do: "attacker", else: "defender"}")
+        Logger.info(
+          "[PlayerSession] #{state.char_name} joined siege #{castle_id} as #{if is_attacker, do: "attacker", else: "defender"}"
+        )
+
       {:error, :already_registered} ->
-        Logger.debug("[PlayerSession] #{state.char_name} already registered for siege #{castle_id}")
+        Logger.debug(
+          "[PlayerSession] #{state.char_name} already registered for siege #{castle_id}"
+        )
     end
 
     {:noreply, state}
@@ -4602,9 +4875,90 @@ defmodule L2E.Session.PlayerSession do
             {:noreply, state}
         end
 
+      # M78: Voiced commands — /loc, /time, /online, /pvpinfo
+      String.starts_with?(cmd, "_voiced.") ->
+        "_voiced." <> voiced_cmd = cmd
+        handle_voiced_command(voiced_cmd, state)
+
       true ->
         {:noreply, state}
     end
+  end
+
+  # ---------------------------------------------------------------------------
+  # M78: Voiced commands — /loc, /time, /online, /pvpinfo
+  # ---------------------------------------------------------------------------
+
+  defp handle_voiced_command("loc", state) do
+    {x, y, z} = state.position
+
+    send(
+      state.conn_pid,
+      {:send_packet,
+       %Server.CreatureSay{
+         char_id: 0,
+         chat_type: 2,
+         char_name: "System",
+         message: "Current location: X:#{x} Y:#{y} Z:#{z}"
+       }}
+    )
+
+    {:noreply, state}
+  end
+
+  defp handle_voiced_command("time", state) do
+    hour = rem(div(:os.system_time(:second), 90), 24)
+    period = if hour >= 6 and hour < 18, do: "Day", else: "Night"
+
+    send(
+      state.conn_pid,
+      {:send_packet,
+       %Server.CreatureSay{
+         char_id: 0,
+         chat_type: 2,
+         char_name: "System",
+         message: "Server time: #{hour}:00 (#{period})"
+       }}
+    )
+
+    {:noreply, state}
+  end
+
+  defp handle_voiced_command("online", state) do
+    count = Registry.count(L2E.Session.Registry)
+
+    send(
+      state.conn_pid,
+      {:send_packet,
+       %Server.CreatureSay{
+         char_id: 0,
+         chat_type: 2,
+         char_name: "System",
+         message: "Players online: #{count}"
+       }}
+    )
+
+    {:noreply, state}
+  end
+
+  defp handle_voiced_command("pvpinfo", state) do
+    send(
+      state.conn_pid,
+      {:send_packet,
+       %Server.CreatureSay{
+         char_id: 0,
+         chat_type: 2,
+         char_name: "System",
+         message: "PvP count: #{state.pvp_kills} | PK count: #{state.pk_kills}"
+       }}
+    )
+
+    {:noreply, state}
+  end
+
+  defp handle_voiced_command(cmd, state) do
+    Logger.debug("[PlayerSession] Unknown voiced command: #{cmd}")
+    {:noreply, state}
   end
 
   defp handle_npc_bypass(npc_id, "Trade", state) do

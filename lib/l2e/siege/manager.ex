@@ -166,17 +166,23 @@ defmodule L2E.Siege.Manager do
   def handle_call({:transfer_castle, castle_id, winner_clan_id, winner_clan_name}, _from, state) do
     case :ets.lookup(@table, {:castle, castle_id}) do
       [{_, castle}] ->
-        new_castle = %{castle |
-          owner_clan_id: winner_clan_id,
-          siege_status: :ended
-        }
+        new_castle = %{castle | owner_clan_id: winner_clan_id, siege_status: :ended}
         :ets.insert(@table, {{:castle, castle_id}, new_castle})
         :ets.insert(@table, {{:attackers, castle_id}, []})
         :ets.insert(@table, {{:defenders, castle_id}, []})
-        Phoenix.PubSub.broadcast(L2E.PubSub, "world:siege",
-          {:castle_captured, castle_id, winner_clan_id, winner_clan_name})
-        Logger.info("[Siege] Castle #{castle_id} captured by clan #{winner_clan_id} (#{winner_clan_name})")
+
+        Phoenix.PubSub.broadcast(
+          L2E.PubSub,
+          "world:siege",
+          {:castle_captured, castle_id, winner_clan_id, winner_clan_name}
+        )
+
+        Logger.info(
+          "[Siege] Castle #{castle_id} captured by clan #{winner_clan_id} (#{winner_clan_name})"
+        )
+
         {:reply, :ok, state}
+
       [] ->
         {:reply, {:error, :not_found}, state}
     end
@@ -191,8 +197,11 @@ defmodule L2E.Siege.Manager do
         ms_until = max(0, DateTime.diff(siege_date, DateTime.utc_now(), :millisecond))
         Process.send_after(self(), {:siege_start_timer, castle_id}, ms_until)
         Logger.info("[Siege] Castle #{castle_id} siege scheduled in #{div(ms_until, 1000)}s")
-      [] -> :ok
+
+      [] ->
+        :ok
     end
+
     {:noreply, state}
   end
 

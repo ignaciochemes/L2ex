@@ -111,6 +111,9 @@ defmodule L2E.Packet.Decoder do
   def decode(0x46, body), do: Client.RequestRestart.decode(body)
   def decode(0x6D, body), do: Client.RequestRestartPoint.decode(body)
 
+  # M77: Spoil / Sweep
+  def decode(0x42, body), do: Client.RequestSweep.decode(body)
+
   # M61: Movement
   def decode(0x41, body), do: Client.MoveWithDelta.decode(body)
   def decode(0x36, body), do: Client.CannotMoveAnymore.decode(body)

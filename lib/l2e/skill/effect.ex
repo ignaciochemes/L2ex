@@ -138,4 +138,72 @@ defmodule L2E.Skill.Effect do
   Returns integer count.
   """
   def cancel_count(power), do: max(1, min(5, div(power, 20)))
+
+  # ── M80: HP Drain ───────────────────────────────────────────────────────────
+
+  @doc "HP drain: deals magic damage AND heals caster for a percentage of damage dealt."
+  @spec apply_hp_drain(map(), map(), pos_integer(), float()) :: %{damage: pos_integer(), healed: pos_integer()}
+  def apply_hp_drain(caster_stats, target_stats, power, drain_ratio \\ 0.5) do
+    damage = apply_magic_damage(caster_stats, target_stats, power)
+    healed = round(damage * drain_ratio)
+    %{damage: damage, healed: healed}
+  end
+
+  # ── M80: Fear ───────────────────────────────────────────────────────────────
+
+  @doc "Fear: returns the duration in ms based on MEN resist."
+  @spec fear_duration(map(), pos_integer()) :: pos_integer()
+  def fear_duration(target_stats, base_duration_ms) do
+    men = Map.get(target_stats, :men, 20)
+    # MEN reduces fear duration: 30 MEN = no reduction, 40 MEN = 25% reduction
+    resist_factor = max(0.1, 1.0 - (men - 30) * 0.025)
+    round(base_duration_ms * resist_factor)
+  end
+
+  # ── M80: Paralyze ───────────────────────────────────────────────────────────
+
+  @doc "Paralyze: returns duration in ms (same resist formula as fear but different CC type)."
+  @spec paralyze_duration(map(), pos_integer()) :: pos_integer()
+  def paralyze_duration(target_stats, base_duration_ms) do
+    fear_duration(target_stats, base_duration_ms)
+  end
+
+  # ── M80: HP percent DoT ─────────────────────────────────────────────────────
+
+  @doc "HP damage over time as percent of max HP."
+  @spec dot_tick_hp_percent(map(), float()) :: pos_integer()
+  def dot_tick_hp_percent(target_stats, percent) do
+    max_hp = Map.get(target_stats, :max_hp, 100)
+    max(1, round(max_hp * percent / 100.0))
+  end
+
+  # ── M80: Dispel ─────────────────────────────────────────────────────────────
+
+  @doc "Dispel: returns count of buffs to remove from target."
+  @spec dispel_count(pos_integer()) :: pos_integer()
+  def dispel_count(power) do
+    # power represents number of buff slots to remove (1-5)
+    max(1, min(5, div(power, 20)))
+  end
+
+  # ── M80: Aggression ─────────────────────────────────────────────────────────
+
+  @doc "Aggression: hate value to add to target NPC hate map."
+  @spec aggression_value(map(), pos_integer()) :: pos_integer()
+  def aggression_value(caster_stats, power) do
+    level = Map.get(caster_stats, :level, 1)
+    level * power
+  end
+
+  # ── M80: Noblesse Blessing ──────────────────────────────────────────────────
+
+  @doc "Noblesse Blessing: returns duration in ms (flat, not reduced by stats)."
+  @spec noblesse_blessing_duration(pos_integer()) :: pos_integer()
+  def noblesse_blessing_duration(base_duration_ms), do: base_duration_ms
+
+  # ── M80: Fake Death ─────────────────────────────────────────────────────────
+
+  @doc "Fake death: returns true if the fake death succeeds (90% base success rate)."
+  @spec fake_death_lands?() :: boolean()
+  def fake_death_lands?(), do: :rand.uniform(100) <= 90
 end

@@ -157,11 +157,13 @@ defmodule L2E.Olympiad.Manager do
     # Persist match result
     winner_reg = winner_id && Map.get(state.registrations, winner_id)
     loser_reg = loser_id && Map.get(state.registrations, loser_id)
+
     if winner_reg && loser_reg do
       Task.start(fn ->
         L2E.DB.OlympiadHistory.insert(1, winner_reg, loser_reg, points_delta)
       end)
     end
+
     {:noreply, state}
   end
 
@@ -190,7 +192,8 @@ defmodule L2E.Olympiad.Manager do
     # Determine heroes (top-points player per class this period)
     heroes = determine_heroes(players)
     :ets.insert(@table, {:heroes, heroes})
-    Phoenix.PubSub.broadcast(L2E.PubSub, "world:olympiad", {:heroes_determined, heroes})
+    Task.start(fn -> L2E.DB.Hero.elect(heroes) end)
+    Phoenix.PubSub.broadcast(L2E.PubSub, "world:olympiad", {:heroes_elected, heroes})
 
     # Schedule next period
     Process.send_after(self(), :period_start, :timer.hours(1))
