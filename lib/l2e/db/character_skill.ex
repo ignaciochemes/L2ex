@@ -45,4 +45,21 @@ defmodule L2E.DB.CharacterSkill do
       conflict_target: [:character_id, :skill_id]
     )
   end
+
+  @doc """
+  Replaces all skills for a character with the given skills map.
+  Used when switching sub-classes so that the next login loads the correct skill set.
+  """
+  @spec replace_for_character(integer(), %{integer() => integer()}) :: :ok
+  def replace_for_character(character_id, skills) do
+    Repo.transaction(fn ->
+      Repo.delete_all(from(s in __MODULE__, where: s.character_id == ^character_id))
+
+      Enum.each(skills, fn {skill_id, level} ->
+        upsert_skill(character_id, skill_id, level)
+      end)
+    end)
+
+    :ok
+  end
 end

@@ -11,6 +11,7 @@ defmodule L2E.DB.CharacterSubclass do
     field(:level, :integer, default: 40)
     field(:exp, :integer, default: 0)
     field(:sp, :integer, default: 0)
+    field(:skills_json, :string)
 
     timestamps()
   end
@@ -56,6 +57,45 @@ defmodule L2E.DB.CharacterSubclass do
     case Repo.get_by(__MODULE__, char_id: char_id, class_index: class_index) do
       nil -> {:error, :not_found}
       subclass -> Repo.delete(subclass)
+    end
+  end
+
+  @doc "Save skill snapshot for a sub-class slot. Silently ignores if record not found."
+  def save_skills(char_id, class_index, skills) do
+    case Repo.get_by(__MODULE__, char_id: char_id, class_index: class_index) do
+      nil ->
+        {:error, :not_found}
+
+      subclass ->
+        subclass
+        |> Ecto.Changeset.change(skills_json: serialize_skills(skills))
+        |> Repo.update()
+    end
+  end
+
+  @doc "Load skill snapshot for a sub-class slot. Returns skills map or nil if not saved yet."
+  def load_skills(char_id, class_index) do
+    case Repo.get_by(__MODULE__, char_id: char_id, class_index: class_index) do
+      %{skills_json: json} when is_binary(json) -> deserialize_skills(json)
+      _ -> nil
+    end
+  end
+
+  # ---- Private serialization ------------------------------------------------
+
+  defp serialize_skills(skills) do
+    skills
+    |> :erlang.term_to_binary()
+    |> Base.encode64()
+  end
+
+  defp deserialize_skills(b64) do
+    try do
+      b64
+      |> Base.decode64!()
+      |> :erlang.binary_to_term([:safe])
+    rescue
+      _ -> nil
     end
   end
 end

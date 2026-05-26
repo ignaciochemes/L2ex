@@ -82,6 +82,9 @@ defmodule L2E.Application do
       # DynamicSupervisor for player session processes
       L2E.Session.Supervisor,
 
+      # M55: Geodata — ETS-backed binary region loader (stub-safe, must start before World)
+      L2E.Geodata,
+
       # WorldSupervisor owns RegionRegistry + RegionSupervisor (rest_for_one)
       L2E.World.Supervisor,
 

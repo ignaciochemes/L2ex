@@ -3886,36 +3886,7 @@ defmodule L2E.Session.PlayerSession do
   end
 
   defp handle_packet(%Client.RequestSubclassChange{class_index: class_index}, state) do
-    target = Enum.find(state.subclasses, fn s -> s.class_index == class_index end)
-
-    if target && target.class_index != (state.active_subclass || 0) do
-      if state.active_subclass do
-        current = Enum.find(state.subclasses, fn s -> s.class_index == state.active_subclass end)
-
-        if current do
-          CharacterSubclass.save(
-            state.char_db_id,
-            current.class_index,
-            state.level,
-            state.exp,
-            state.sp
-          )
-        end
-      end
-
-      send(
-        state.conn_pid,
-        {:send_packet,
-         %Server.ExSubclassInfo{
-           subclasses: state.subclasses,
-           active_index: class_index
-         }}
-      )
-
-      {:noreply, %{state | active_subclass: class_index, class_id: target.class_id}}
-    else
-      {:noreply, state}
-    end
+    do_subclass_change(class_index, state)
   end
 
   defp handle_packet(%Client.RequestExAddSubclass{class_id: new_class_id}, state) do
@@ -4994,6 +4965,62 @@ defmodule L2E.Session.PlayerSession do
     |> Enum.into(%{}, fn q ->
       {q.quest_id, %{state: q.state, cond: q.cond, count: q.count, reward_taken: q.reward_taken}}
     end)
+  end
+
+  # ---------------------------------------------------------------------------
+  # Sub-class switch: saves current sub state, loads target sub state + skills
+  # ---------------------------------------------------------------------------
+  defp do_subclass_change(target_index, state) do
+    target = Enum.find(state.subclasses, fn s -> s.class_index == target_index end)
+    current_index = state.active_subclass || 0
+
+    cond do
+      is_nil(target) ->
+        {:noreply, state}
+
+      target.class_index == current_index ->
+        {:noreply, state}
+
+      true ->
+        # 1. Persist current sub's level/exp/sp + skills
+        CharacterSubclass.save(
+          state.char_db_id,
+          current_index,
+          state.level,
+          state.exp,
+          state.sp
+        )
+
+        CharacterSubclass.save_skills(state.char_db_id, current_index, state.skills)
+
+        # 2. Load target sub's skills (snapshot or empty if first time)
+        new_skills =
+          case CharacterSubclass.load_skills(state.char_db_id, target_index) do
+            nil -> %{}
+            skills -> skills
+          end
+
+        # 3. Build new state with target sub's stats + skills
+        new_state = %{
+          state
+          | level: target.level,
+            exp: target.exp,
+            sp: target.sp,
+            class_id: target.class_id,
+            active_subclass: target_index,
+            skills: new_skills
+        }
+
+        # 4. Broadcast updated sub info + skills + user info
+        send(state.conn_pid, {:send_packet, %Server.ExSubclassInfo{
+          subclasses: state.subclasses,
+          active_index: target_index
+        }})
+
+        send(state.conn_pid, {:send_packet, build_skill_list_packet(new_skills)})
+
+        {:noreply, new_state}
+    end
   end
 
   defp build_skill_list_packet(skills) do
