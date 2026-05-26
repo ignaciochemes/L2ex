@@ -214,7 +214,10 @@ defmodule L2E.Session.PlayerSession do
       active_duel_id: nil,
       # M72: Pet
       pet_pid: nil,
-      pet_item_obj_id: nil
+      pet_item_obj_id: nil,
+      # M70-B / M73: Olympiad match state
+      olympiad_match_pid: nil,
+      olympiad_return_pos: nil
     }
 
     {:ok, state}
@@ -1391,6 +1394,79 @@ defmodule L2E.Session.PlayerSession do
       # Player left zone — no more ticks
       {:noreply, %{state | zone_damage_timer: nil}}
     end
+  end
+
+  # ---- M70-B: Olympiad match messages from Olympiad.Match -------------------
+
+  def handle_info({:olympiad_match_start, match_pid, _opponent_info}, state) do
+    {:noreply, %{state | olympiad_match_pid: match_pid, olympiad_return_pos: state.position}}
+  end
+
+  def handle_info({:olympiad_arena_teleport, x, y, z}, state) do
+    new_pos = {x, y, z}
+
+    send(state.conn_pid, {:send_packet, %Server.TeleportToLocation{
+      object_id: state.char_id,
+      x: x,
+      y: y,
+      z: z
+    }})
+
+    {:noreply, %{state | position: new_pos}}
+  end
+
+  def handle_info({:olympiad_match_result, :draw, _opponent_name, _points_delta}, state) do
+    send(state.conn_pid, {:send_packet, %Server.ExOlympiadMatchResult{
+      winner_char_id: 0,
+      winner_name: "",
+      loser_char_id: 0,
+      loser_name: ""
+    }})
+
+    {:noreply, state}
+  end
+
+  def handle_info({:olympiad_match_result, :win, opponent_name, _points_delta}, state) do
+    send(state.conn_pid, {:send_packet, %Server.ExOlympiadMatchResult{
+      winner_char_id: state.char_id,
+      winner_name: state.char_name,
+      loser_char_id: 0,
+      loser_name: opponent_name || ""
+    }})
+
+    {:noreply, state}
+  end
+
+  def handle_info({:olympiad_match_result, :loss, opponent_name, _points_delta}, state) do
+    send(state.conn_pid, {:send_packet, %Server.ExOlympiadMatchResult{
+      winner_char_id: 0,
+      winner_name: opponent_name || "",
+      loser_char_id: state.char_id,
+      loser_name: state.char_name
+    }})
+
+    {:noreply, state}
+  end
+
+  def handle_info({:olympiad_return, {x, y, z}}, state) do
+    return_pos = state.olympiad_return_pos || {x, y, z}
+    {rx, ry, rz} = return_pos
+
+    send(state.conn_pid, {:send_packet, %Server.TeleportToLocation{
+      object_id: state.char_id,
+      x: rx,
+      y: ry,
+      z: rz
+    }})
+
+    {:noreply, %{state | olympiad_match_pid: nil, olympiad_return_pos: nil, position: return_pos}}
+  end
+
+  # ---- M72-B: Pet died -------------------------------------------------------
+
+  def handle_info({:pet_died}, state) do
+    if state.pet_pid, do: Process.exit(state.pet_pid, :normal)
+    {:noreply, %{state | pet_pid: nil, pet_item_obj_id: nil}}
   end
 
   def handle_info(msg, state) do
@@ -3760,7 +3836,76 @@ defmodule L2E.Session.PlayerSession do
   end
 
   # ---- M68: Sub-class ---------------------------------------------------------
-  # Sub-classes are loaded on EnterWorld — no dedicated client packet in M68 foundation.
+
+  defp handle_packet(%Client.RequestSubclassInfo{}, state) do
+    subclasses =
+      if state.subclasses == [] do
+        CharacterSubclass.load_for_character(state.char_db_id)
+      else
+        state.subclasses
+      end
+
+    send(state.conn_pid, {:send_packet, %Server.ExSubclassInfo{
+      subclasses: subclasses,
+      active_index: state.active_subclass || 0
+    }})
+
+    {:noreply, %{state | subclasses: subclasses}}
+  end
+
+  defp handle_packet(%Client.RequestSubclassChange{class_index: class_index}, state) do
+    target = Enum.find(state.subclasses, fn s -> s.class_index == class_index end)
+
+    if target && target.class_index != (state.active_subclass || 0) do
+      if state.active_subclass do
+        current = Enum.find(state.subclasses, fn s -> s.class_index == state.active_subclass end)
+
+        if current do
+          CharacterSubclass.save(
+            state.char_db_id,
+            current.class_index,
+            state.level,
+            state.exp,
+            state.sp
+          )
+        end
+      end
+
+      send(state.conn_pid, {:send_packet, %Server.ExSubclassInfo{
+        subclasses: state.subclasses,
+        active_index: class_index
+      }})
+
+      {:noreply, %{state | active_subclass: class_index, class_id: target.class_id}}
+    else
+      {:noreply, state}
+    end
+  end
+
+  defp handle_packet(%Client.RequestExAddSubclass{class_id: new_class_id}, state) do
+    sub_count = length(state.subclasses)
+
+    if sub_count < 3 && L2E.Data.SubclassData.valid_subclass?(state.class_id, new_class_id) do
+      next_index = sub_count + 1
+
+      case CharacterSubclass.add(state.char_db_id, new_class_id, next_index) do
+        {:ok, new_sub} ->
+          updated_subs = state.subclasses ++ [new_sub]
+
+          send(state.conn_pid, {:send_packet, %Server.ExSubclassInfo{
+            subclasses: updated_subs,
+            active_index: state.active_subclass || 0
+          }})
+
+          {:noreply, %{state | subclasses: updated_subs}}
+
+        _ ->
+          {:noreply, state}
+      end
+    else
+      {:noreply, state}
+    end
+  end
 
   # ---- M69: Duel --------------------------------------------------------------
 
@@ -3843,6 +3988,7 @@ defmodule L2E.Session.PlayerSession do
 
       pet_pid ->
         send(pet_pid, {:use_item, object_id})
+        L2E.Pet.Session.feed(pet_pid, 10)
         {:noreply, state}
     end
   end

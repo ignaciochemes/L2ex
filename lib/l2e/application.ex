@@ -34,6 +34,9 @@ defmodule L2E.Application do
       # M68: Sub-class data
       L2E.Data.SubclassData,
 
+      # M72-B: Pet template data
+      L2E.Data.PetDataTable,
+
       # M69: Duel system
       {Registry, keys: :unique, name: L2E.Duel.Registry},
       L2E.Duel.Manager,

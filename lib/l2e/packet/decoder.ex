@@ -184,5 +184,10 @@ defmodule L2E.Packet.Decoder do
   # M70: Olympiad (extended)
   defp decode_ext(0x13, body), do: Client.RequestOlympiadMatchList.decode(body)
 
+  # M68-B: Sub-class switching (extended)
+  defp decode_ext(0x31, body), do: Client.RequestSubclassInfo.decode(body)
+  defp decode_ext(0x32, body), do: Client.RequestSubclassChange.decode(body)
+  defp decode_ext(0x33, body), do: Client.RequestExAddSubclass.decode(body)
+
   defp decode_ext(_sub, _body), do: {:error, :unknown_opcode}
 end

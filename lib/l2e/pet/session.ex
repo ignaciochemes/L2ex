@@ -37,6 +37,15 @@ defmodule L2E.Pet.Session do
   @doc "Get pet info (for PetInfo packet)."
   def get_info(pet_pid), do: GenServer.call(pet_pid, :get_info)
 
+  @doc "Feed the pet. food_amount is added to food_level (capped at 100)."
+  def feed(pid, food_amount), do: GenServer.cast(pid, {:feed, food_amount})
+
+  @doc "List items carried by the pet (initially empty)."
+  def get_items(pid), do: GenServer.call(pid, :get_items)
+
+  @doc "Apply damage to the pet. Sends {:pet_died} to owner if HP reaches 0."
+  def take_damage(pid, amount), do: GenServer.cast(pid, {:take_damage, amount})
+
   @impl GenServer
   def init(opts) do
     owner_pid = Keyword.fetch!(opts, :owner_pid)
@@ -68,11 +77,16 @@ defmodule L2E.Pet.Session do
       # Pet state
       food_level: 100,
       hungry: false,
+      # Pet inventory (future expansion)
+      pet_items: [],
       # Behavior
       action: :follow,
       hunger_timer: hunger_timer,
       regen_timer: regen_timer
     }
+
+    # Announce this pet to the world so nearby players can see it on summon.
+    Phoenix.PubSub.broadcast(L2E.PubSub, "world:pets", {:pet_spawned, state})
 
     {:ok, state}
   end
@@ -80,6 +94,10 @@ defmodule L2E.Pet.Session do
   @impl GenServer
   def handle_call(:get_info, _from, state) do
     {:reply, state, state}
+  end
+
+  def handle_call(:get_items, _from, state) do
+    {:reply, state.pet_items, state}
   end
 
   @impl GenServer
@@ -91,10 +109,32 @@ defmodule L2E.Pet.Session do
     {:noreply, %{state | action: :idle}}
   end
 
-  def handle_cast({:owner_moved, new_position}, %{action: :follow} = state) do
-    # Follow AI: move pet toward owner's new position
-    # In a full implementation, this would use pathfinding
-    {:noreply, %{state | position: new_position}}
+  def handle_cast({:owner_moved, {ox, oy, oz}}, %{action: :follow} = state) do
+    # Follow AI: position pet 100 units behind the owner on the X axis.
+    # A full implementation would use pathfinding and proper heading math.
+    follow_pos = {ox - 100, oy, oz}
+    {:noreply, %{state | position: follow_pos}}
+  end
+
+  def handle_cast({:feed, food_amount}, state) do
+    new_food = min(100, state.food_level + food_amount)
+    hungry = new_food < 20
+    {:noreply, %{state | food_level: new_food, hungry: hungry}}
+  end
+
+  def handle_cast({:take_damage, amount}, state) do
+    new_hp = max(0.0, state.hp - amount)
+    new_state = %{state | hp: new_hp}
+
+    new_state =
+      if new_hp == 0.0 do
+        send(state.owner_pid, {:pet_died})
+        %{new_state | action: :dying}
+      else
+        new_state
+      end
+
+    {:noreply, new_state}
   end
 
   def handle_cast(_, state), do: {:noreply, state}

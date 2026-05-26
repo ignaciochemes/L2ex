@@ -2884,3 +2884,96 @@ defmodule L2E.Packet.Server.SendMacroList do
     <<len::little-16>> <> chars
   end
 end
+
+# ---- M68-B: Sub-class packets -----------------------------------------------
+
+defmodule L2E.Packet.Server.ExSubclassInfo do
+  @moduledoc """
+  0xFE/0x58 — sends the player's sub-class list and active index.
+
+  Project-specific opcode (0x58 is unused in L2J Mobius CT0 ServerPackets enum;
+  the last defined entry before this gap is EX_VARIATION_CANCEL_RESULT at 0x57).
+  In CT0 Interlude, sub-class info is embedded in CharInfo/UserInfo; this packet
+  provides a dedicated refresh path for the L2E Elixir server.
+
+  Binary layout (little-endian):
+    0xFE(8)  sub_opcode(16LE=0x0058)
+    active_index(32LE)  count(32LE)
+    for each sub-class:
+      class_index(32LE)  class_id(32LE)
+      exp(64LE)          sp(32LE)
+      level(32LE)        is_max(8)
+
+  `subclasses` is a list of maps with keys:
+    class_index, class_id, exp, sp, level, is_max
+  """
+  @behaviour L2E.Packet.Encodable
+
+  defstruct [:active_index, subclasses: []]
+
+  @type t :: %__MODULE__{}
+
+  @impl L2E.Packet.Encodable
+  def encode(%__MODULE__{active_index: active_index, subclasses: subclasses}) do
+    count = length(subclasses)
+    subs_bin = encode_subclasses(subclasses)
+
+    <<0xFE::8, 0x0058::little-16, (active_index || 0)::little-32, count::little-32,
+      subs_bin::binary>>
+  end
+
+  defp encode_subclasses(subclasses) do
+    Enum.reduce(subclasses, <<>>, fn s, acc ->
+      is_max = if Map.get(s, :is_max, false), do: 1, else: 0
+
+      acc <>
+        <<Map.get(s, :class_index, 0)::little-32, Map.get(s, :class_id, 0)::little-32,
+          Map.get(s, :exp, 0)::little-64, Map.get(s, :sp, 0)::little-32,
+          Map.get(s, :level, 40)::little-32, is_max::8>>
+    end)
+  end
+end
+
+# ---- M70-B: Olympiad Match Result (for Bishop) --------------------------------
+
+defmodule L2E.Packet.Server.ExOlympiadMatchResult do
+  @moduledoc """
+  0xFE/0x59 — reports the winner and loser of an Olympiad match.
+
+  Project-specific opcode (0x59 is unused in L2J Mobius CT0 ServerPackets enum).
+  L2J Mobius CT0 has `ExOlympiadMatchEnd` (0xFE/0x2C) as a static no-payload signal;
+  this packet carries the full winner/loser data for Bishop's `Olympiad.Match` GenServer.
+
+  Binary layout (little-endian):
+    0xFE(8)  sub_opcode(16LE=0x0059)
+    winner_char_id(32LE)  winner_name(utf16le null-terminated)
+    loser_char_id(32LE)   loser_name(utf16le null-terminated)
+    draw(32LE=0)
+  """
+  @behaviour L2E.Packet.Encodable
+
+  defstruct [:winner_char_id, :winner_name, :loser_char_id, :loser_name]
+
+  @type t :: %__MODULE__{}
+
+  @impl L2E.Packet.Encodable
+  def encode(%__MODULE__{
+        winner_char_id: winner_id,
+        winner_name: winner_name,
+        loser_char_id: loser_id,
+        loser_name: loser_name
+      }) do
+    winner_name_bin = encode_utf16le(winner_name || "")
+    loser_name_bin = encode_utf16le(loser_name || "")
+
+    <<0xFE::8, 0x0059::little-16, (winner_id || 0)::little-32>> <>
+      winner_name_bin <>
+      <<(loser_id || 0)::little-32>> <>
+      loser_name_bin <>
+      <<0::little-32>>
+  end
+
+  defp encode_utf16le(str) do
+    :unicode.characters_to_binary(str, :utf8, {:utf16, :little}) <> <<0::16>>
+  end
+end
