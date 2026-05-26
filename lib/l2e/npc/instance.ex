@@ -413,7 +413,13 @@ defmodule L2E.NPC.Instance do
         end
 
       {:noreply,
-       %{state | position: state.spawn_pos, ai_state: :idle, hp: state.template.max_hp * 1.0, wander_timer: wander_timer}}
+       %{
+         state
+         | position: state.spawn_pos,
+           ai_state: :idle,
+           hp: state.template.max_hp * 1.0,
+           wander_timer: wander_timer
+       }}
     else
       # Step toward spawn (simplified: teleport at walk speed steps)
       step =
@@ -531,7 +537,15 @@ defmodule L2E.NPC.Instance do
         nil
       end
 
-    %{state | hate_map: %{}, target_pid: nil, target_id: nil, ai_state: :idle, attack_timer: nil, wander_timer: wander_timer}
+    %{
+      state
+      | hate_map: %{},
+        target_pid: nil,
+        target_id: nil,
+        ai_state: :idle,
+        attack_timer: nil,
+        wander_timer: wander_timer
+    }
   end
 
   defp execute_attack(state) do
@@ -693,7 +707,9 @@ defmodule L2E.NPC.Instance do
             skill_level: skill_template.level,
             hit_time: skill_template.cast_time_ms,
             reuse_delay: skill_template.reuse_ms,
-            x: x, y: y, z: z
+            x: x,
+            y: y,
+            z: z
           })
 
           broadcast_to_region(state, %Server.MagicSkillLaunched{
@@ -715,7 +731,9 @@ defmodule L2E.NPC.Instance do
             skill_level: skill_template.level,
             hit_time: skill_template.cast_time_ms,
             reuse_delay: skill_template.reuse_ms,
-            x: x, y: y, z: z
+            x: x,
+            y: y,
+            z: z
           })
 
           state
@@ -730,7 +748,9 @@ defmodule L2E.NPC.Instance do
             skill_level: skill_template.level,
             hit_time: skill_template.cast_time_ms,
             reuse_delay: skill_template.reuse_ms,
-            x: x, y: y, z: z
+            x: x,
+            y: y,
+            z: z
           })
 
           state
@@ -746,7 +766,9 @@ defmodule L2E.NPC.Instance do
             skill_level: skill_template.level,
             hit_time: skill_template.cast_time_ms,
             reuse_delay: skill_template.reuse_ms,
-            x: x, y: y, z: z
+            x: x,
+            y: y,
+            z: z
           })
 
           %{state | hp: new_hp}
@@ -762,7 +784,9 @@ defmodule L2E.NPC.Instance do
             skill_level: skill_template.level,
             hit_time: skill_template.cast_time_ms,
             reuse_delay: skill_template.reuse_ms,
-            x: x, y: y, z: z
+            x: x,
+            y: y,
+            z: z
           })
 
           state

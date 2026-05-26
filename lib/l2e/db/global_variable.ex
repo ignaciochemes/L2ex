@@ -3,7 +3,7 @@ defmodule L2E.DB.GlobalVariable do
 
   @primary_key {:name, :string, []}
   schema "global_variables" do
-    field :value, :string
+    field(:value, :string)
     timestamps()
   end
 end

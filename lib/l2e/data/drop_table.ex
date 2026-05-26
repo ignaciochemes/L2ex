@@ -40,7 +40,7 @@ defmodule L2E.Data.DropTable do
   # ── Loading ───────────────────────────────────────────────────────────────
 
   defp load_all do
-    base = Path.join(:code.priv_dir(:l2e) |> to_string() |> Path.dirname(), @npcs_dir)
+    base = Path.join(File.cwd!(), @npcs_dir)
 
     case File.ls(base) do
       {:ok, entries} ->

@@ -61,13 +61,20 @@ defmodule L2E.LoginServer.ConnectionHandler do
       handshake_timer: nil
     }
 
-    send_init(socket, session_id, scrambled_modulus, session_bf_key)
+    Logger.info("[LoginServer] New connection — sending Init (session_id=#{session_id})")
+
+    case send_init(socket, session_id, scrambled_modulus, session_bf_key) do
+      :ok -> Logger.info("[LoginServer] Init sent OK (#{170} bytes body, #{172} bytes total)")
+      {:error, reason} -> Logger.warning("[LoginServer] Failed to send Init: #{inspect(reason)}")
+    end
+
     timer = Process.send_after(self(), :handshake_timeout, @handshake_timeout_ms)
     {:continue, %{state | handshake_timer: timer}}
   end
 
   @impl ThousandIsland.Handler
   def handle_data(data, socket, state) do
+    Logger.info("[LoginServer] Received #{byte_size(data)} bytes from client (state=#{state.auth_state}, buffer_was=#{byte_size(state.buffer)})")
     buffer = state.buffer <> data
     {packets, rest} = split_frames(buffer)
 
@@ -114,20 +121,22 @@ defmodule L2E.LoginServer.ConnectionHandler do
   # -----------------------------------------------------------------------
 
   defp handle_packet(payload, socket, state) do
+    Logger.info("[LoginServer] handle_packet: #{byte_size(payload)} bytes")
+
     case Crypto.decrypt(payload, state.bf_ctx) do
       {:ok, <<opcode::8, plain::binary>>} ->
+        Logger.info("[LoginServer] Decrypted OK — opcode=0x#{Integer.to_string(opcode, 16)} plain_size=#{byte_size(plain)}")
         dispatch(opcode, plain, socket, state)
 
       {:ok, _} ->
+        Logger.warning("[LoginServer] Decrypted but no opcode byte (empty payload)")
         {:continue, state}
 
       {:error, reason} ->
-        Logger.warning("[LoginServer] Decrypt failed: #{reason}")
+        Logger.warning("[LoginServer] Decrypt failed: #{reason} — payload_hex=#{Base.encode16(payload)}")
         {:continue, state}
     end
   end
-
-  defp handle_packet(_, _socket, state), do: {:continue, state}
 
   defp dispatch(opcode, body, socket, state) do
     case Decoder.decode(opcode, body) do
@@ -150,6 +159,7 @@ defmodule L2E.LoginServer.ConnectionHandler do
   # --- AuthGameGuard (state :wait_auth) ------------------------------------
 
   defp handle_decoded(%AuthGameGuard{session_id: sid}, socket, %{auth_state: :wait_auth} = state) do
+    Logger.info("[LoginServer] Got AuthGameGuard (sid=#{sid}) — sending GGAuth")
     send_encrypted_static(socket, Encoder.encode(%GGAuth{session_id: sid}))
     {:continue, state}
   end
@@ -247,7 +257,7 @@ defmodule L2E.LoginServer.ConnectionHandler do
   # Send helpers
   # -----------------------------------------------------------------------
 
-  # Init packet is NEVER encrypted
+  # Init packet is NEVER encrypted; returns :ok | {:error, reason}
   defp send_init(socket, session_id, scrambled_modulus, bf_key) do
     payload =
       Encoder.encode(%Init{
@@ -256,7 +266,9 @@ defmodule L2E.LoginServer.ConnectionHandler do
         blowfish_key: bf_key
       })
 
-    send_raw(socket, payload)
+    Logger.info("[LoginServer] send_init payload=#{byte_size(payload)} bytes (body), bf_key_hex=#{Base.encode16(bf_key)}")
+    result = send_raw(socket, payload)
+    result
   end
 
   # LoginOk uses STATIC Blowfish key + XOR-pass
@@ -275,7 +287,9 @@ defmodule L2E.LoginServer.ConnectionHandler do
 
   defp frame(socket, payload) do
     total_len = byte_size(payload) + 2
-    ThousandIsland.Socket.send(socket, <<total_len::little-16>> <> payload)
+    result = ThousandIsland.Socket.send(socket, <<total_len::little-16>> <> payload)
+    if result != :ok, do: Logger.warning("[LoginServer] Socket.send failed: #{inspect(result)}")
+    result
   end
 
   defp cancel_timer(nil), do: :ok

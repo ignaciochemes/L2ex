@@ -9,9 +9,9 @@ defmodule L2E.LoginServer.Crypto do
   random 16 bytes sent in the `Init` packet). Decrypt then verify checksum.
 
   ### Server → Client (encrypt)
-  - **First encrypted packet** (`LoginOk`): XOR-pass + Blowfish-ECB with the
+  - **First encrypted packet** (`GGAuth`): XOR-pass + Blowfish-ECB with the
     **static key** (hardcoded in both client and server).
-  - **All subsequent packets** (`ServerList`, `PlayOk`): append checksum,
+  - **All subsequent packets** (`LoginOk`, `ServerList`, `PlayOk`): append checksum,
     pad to 8-byte boundary, Blowfish-ECB with the **session key**.
 
   ## Checksum (NewCrypt.java)

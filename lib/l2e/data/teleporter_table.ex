@@ -123,21 +123,23 @@ defmodule L2E.Data.TeleporterTable do
               |> xpath(
                 ~x"./location"l,
                 name: ~x"./@name"s,
-                x: ~x"./@x"i,
-                y: ~x"./@y"i,
-                z: ~x"./@z"i,
-                fee_count: ~x"./@feeCount"i,
-                fee_id: ~x"./@feeId"i
+                x: ~x"./@x"s,
+                y: ~x"./@y"s,
+                z: ~x"./@z"s,
+                fee_count: ~x"./@feeCount"s,
+                fee_id: ~x"./@feeId"s
               )
               |> Enum.map(fn loc ->
+                fee_id = safe_integer(loc.fee_id, 0)
+
                 %{
                   name: loc.name,
-                  x: loc.x,
-                  y: loc.y,
-                  z: loc.z,
-                  # Default 0 = adena when no feeId
-                  fee_id: if(loc.fee_id == 0, do: 57, else: loc.fee_id),
-                  fee_count: loc.fee_count,
+                  x: safe_integer(loc.x, 0),
+                  y: safe_integer(loc.y, 0),
+                  z: safe_integer(loc.z, 0),
+                  # Default 57 = adena when no feeId
+                  fee_id: if(fee_id == 0, do: 57, else: fee_id),
+                  fee_count: safe_integer(loc.fee_count, 0),
                   type: type
                 }
               end)
@@ -161,4 +163,12 @@ defmodule L2E.Data.TeleporterTable do
   defp parse_type("CLAN_HALL"), do: :clan_hall
   defp parse_type("DUNGEON"), do: :dungeon
   defp parse_type(_), do: :normal
+
+  defp safe_integer("", default), do: default
+  defp safe_integer(s, default) when is_binary(s) do
+    case Integer.parse(s) do
+      {n, _} -> n
+      :error -> default
+    end
+  end
 end

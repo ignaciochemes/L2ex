@@ -74,7 +74,7 @@ end
 defmodule L2E.LoginServer.Packet.Server.LoginOk do
   @moduledoc """
   Opcode 0x03 — sent after successful RSA credential verification.
-  Encrypted with STATIC Blowfish key + XOR-pass.
+  Encrypted with SESSION Blowfish key + checksum.
   Reference: `LoginOk.java`
   """
   @behaviour L2E.Packet.Encodable
