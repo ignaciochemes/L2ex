@@ -11,7 +11,7 @@ defmodule L2E.DB.Account do
     field(:username, :string)
     field(:password_hash, :string)
     field(:access_level, :integer, default: 0)
-    timestamps(type: :utc_datetime)
+    timestamps(type: :utc_datetime_usec)
   end
 
   @spec registration_changeset(map()) :: Ecto.Changeset.t()

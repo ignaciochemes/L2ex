@@ -4,6 +4,8 @@ defmodule L2E.DB.ClanWarehouseItem do
 
   @moduledoc """
   Persistent item stored in a clan's shared warehouse.
+
+  Soft deletes use `soft_deleted_at` field — queries exclude rows where this is non-nil.
   """
 
   schema "clan_warehouse_items" do
@@ -11,14 +13,15 @@ defmodule L2E.DB.ClanWarehouseItem do
     field(:item_id, :integer)
     field(:count, :integer, default: 1)
     field(:enchant_level, :integer, default: 0)
-    timestamps(type: :utc_datetime)
+    field(:soft_deleted_at, :utc_datetime_usec)
+    timestamps(type: :utc_datetime_usec)
   end
 
   @type t :: %__MODULE__{}
 
   def changeset(item, attrs) do
     item
-    |> cast(attrs, [:clan_id, :item_id, :count, :enchant_level])
+    |> cast(attrs, [:clan_id, :item_id, :count, :enchant_level, :soft_deleted_at])
     |> validate_required([:clan_id, :item_id])
     |> validate_number(:count, greater_than: 0)
   end

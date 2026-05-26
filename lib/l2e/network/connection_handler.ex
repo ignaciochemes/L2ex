@@ -20,6 +20,7 @@ defmodule L2E.Network.ConnectionHandler do
 
   alias L2E.Crypto.SessionCrypt
   alias L2E.Packet.{Decoder, Encoder, Router}
+  alias L2E.Network.FloodProtector
 
   # Maximum allowed payload size (bytes). Frames larger than this are
   # immediately rejected — prevents memory exhaustion from malformed clients.
@@ -28,19 +29,12 @@ defmodule L2E.Network.ConnectionHandler do
   # Milliseconds before a connection that never completes handshake is closed.
   @handshake_timeout_ms 15_000
 
-  # Per-opcode flood limits (packets per second window).
-  @flood_limit 15
-  @strict_flood_limit 5
-  # Opcodes that require stricter rate limiting (ValidatePosition, AttackRequest, UseSkill)
-  @strict_opcodes [0x01, 0x0A, 0x2C]
-
   @type state :: %{
           session_pid: pid() | nil,
           crypt: SessionCrypt.t(),
           buffer: binary(),
           handshake_timer: reference() | nil,
-          packet_counters: %{integer() => non_neg_integer()},
-          flood_window_start: integer()
+          flood_state: map()
         }
 
   # -----------------------------------------------------------------------
@@ -58,8 +52,7 @@ defmodule L2E.Network.ConnectionHandler do
       crypt: crypt,
       buffer: <<>>,
       handshake_timer: timer,
-      packet_counters: %{},
-      flood_window_start: 0
+      flood_state: FloodProtector.new_state()
     }
 
     :ok = ThousandIsland.Socket.send(socket, build_key_packet_frame(key_8, crypt))
@@ -170,57 +163,28 @@ defmodule L2E.Network.ConnectionHandler do
   end
 
   defp process_packet(<<opcode::8, body::binary>>, _socket, state) do
-    {verdict, new_state} = check_flood(state, opcode)
-
-    case verdict do
-      :drop ->
-        Logger.debug("[ConnectionHandler] Flood drop opcode 0x#{Integer.to_string(opcode, 16)}")
-        {:ok, new_state}
-
-      :allow ->
+    case FloodProtector.check_packet(state.flood_state, opcode) do
+      {:ok, new_flood_state} ->
         case Decoder.decode(opcode, body) do
           {:ok, packet} ->
-            Router.dispatch(packet, self(), new_state.session_pid)
-            {:ok, new_state}
+            Router.dispatch(packet, self(), state.session_pid)
+            {:ok, %{state | flood_state: new_flood_state}}
 
           {:error, :unknown_opcode} ->
             Logger.debug("[ConnectionHandler] Unknown opcode 0x#{Integer.to_string(opcode, 16)}")
-            {:ok, new_state}
+            {:ok, %{state | flood_state: new_flood_state}}
 
           {:error, :malformed} ->
             {:error, :malformed_packet}
         end
+
+      {:error, :flood_detected, reason} ->
+        Logger.warn("[ConnectionHandler] #{reason} — disconnecting")
+        {:error, :flood_detected}
     end
   end
 
   defp process_packet(<<>>, _socket, state), do: {:ok, state}
-
-  # -----------------------------------------------------------------------
-  # Flood protection
-  # -----------------------------------------------------------------------
-
-  defp check_flood(%{flood_window_start: window_start, packet_counters: counters} = state, opcode) do
-    now = System.monotonic_time(:millisecond)
-
-    {window_start, counters} =
-      if now - window_start > 1_000 do
-        {now, %{}}
-      else
-        {window_start, counters}
-      end
-
-    count = Map.get(counters, opcode, 0) + 1
-
-    new_state = %{
-      state
-      | flood_window_start: window_start,
-        packet_counters: Map.put(counters, opcode, count)
-    }
-
-    limit = if opcode in @strict_opcodes, do: @strict_flood_limit, else: @flood_limit
-    verdict = if count > limit, do: :drop, else: :allow
-    {verdict, new_state}
-  end
 
   # -----------------------------------------------------------------------
   # KeyPacket (server → client, first frame, UNENCRYPTED)

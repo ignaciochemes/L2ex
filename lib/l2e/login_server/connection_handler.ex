@@ -21,7 +21,7 @@ defmodule L2E.LoginServer.ConnectionHandler do
 
   require Logger
 
-  alias L2E.LoginServer.{Crypto, RsaKey, SessionKey, AccountStore, AuthService}
+  alias L2E.LoginServer.{Crypto, RsaKey, SessionKey, AccountStore, AuthService, IpRateLimiter}
   alias L2E.LoginServer.Packet.{Decoder, Encoder}
   alias L2E.LoginServer.Packet.Client.{RequestAuthLogin, RequestServerList, RequestServerLogin}
   alias L2E.LoginServer.Packet.Client.AuthGameGuard
@@ -48,6 +48,9 @@ defmodule L2E.LoginServer.ConnectionHandler do
     session_id = :rand.uniform(0x7FFFFFFF)
     bf_ctx = L2E.Commons.Blowfish.init_key(session_bf_key)
 
+    # Extract client IP for rate limiting
+    client_ip = get_client_ip(socket)
+
     state = %{
       rsa_private_key: private_key,
       session_bf_key: session_bf_key,
@@ -58,10 +61,11 @@ defmodule L2E.LoginServer.ConnectionHandler do
       session_key: nil,
       login_ok_sent: false,
       buffer: <<>>,
-      handshake_timer: nil
+      handshake_timer: nil,
+      client_ip: client_ip
     }
 
-    Logger.info("[LoginServer] New connection — sending Init (session_id=#{session_id})")
+    Logger.info("[LoginServer] New connection from #{inspect(client_ip)} — sending Init (session_id=#{session_id})")
 
     case send_init(socket, session_id, scrambled_modulus, session_bf_key) do
       :ok -> Logger.info("[LoginServer] Init sent OK (#{170} bytes body, #{172} bytes total)")
@@ -167,44 +171,54 @@ defmodule L2E.LoginServer.ConnectionHandler do
   # --- RequestAuthLogin (state :wait_auth) ---------------------------------
 
   defp handle_decoded(%RequestAuthLogin{} = pkt, socket, %{auth_state: :wait_auth} = state) do
-    block = if pkt.new_method, do: binary_part(pkt.rsa_block, 0, 128), else: pkt.rsa_block
+    # Check IP-based rate limit
+    case IpRateLimiter.check_ip(state.client_ip) do
+      :ok ->
+        block = if pkt.new_method, do: binary_part(pkt.rsa_block, 0, 128), else: pkt.rsa_block
 
-    case RsaKey.decrypt(state.rsa_private_key, block) do
-      {:ok, plain} ->
-        {username, password} = RequestAuthLogin.extract_credentials(plain)
+        case RsaKey.decrypt(state.rsa_private_key, block) do
+          {:ok, plain} ->
+            {username, password} = RequestAuthLogin.extract_credentials(plain)
 
-        case AuthService.authenticate(username, password) do
-          {:ok, _account} ->
-            session_key = SessionKey.new()
-            cancel_timer(state.handshake_timer)
+            case AuthService.authenticate(username, password) do
+              {:ok, _account} ->
+                session_key = SessionKey.new()
+                cancel_timer(state.handshake_timer)
 
-            ok_packet = %LoginOk{
-              login_ok1: session_key.login_ok1,
-              login_ok2: session_key.login_ok2
-            }
+                ok_packet = %LoginOk{
+                  login_ok1: session_key.login_ok1,
+                  login_ok2: session_key.login_ok2
+                }
 
-            send_encrypted_session(socket, Encoder.encode(ok_packet), state.bf_ctx)
+                send_encrypted_session(socket, Encoder.encode(ok_packet), state.bf_ctx)
 
-            {:continue,
-             %{
-               state
-               | username: username,
-                 session_key: session_key,
-                 login_ok_sent: true,
-                 auth_state: :wait_server_select,
-                 handshake_timer: nil
-             }}
+                {:continue,
+                 %{
+                   state
+                   | username: username,
+                     session_key: session_key,
+                     login_ok_sent: true,
+                     auth_state: :wait_server_select,
+                     handshake_timer: nil
+                 }}
+
+              {:error, reason} ->
+                Logger.info("[LoginServer] Auth failed for #{username}: #{reason}")
+                cancel_timer(state.handshake_timer)
+                fail = %LoginFail{reason: LoginFail.reason_access_failed()}
+                send_raw(socket, Encoder.encode(fail))
+                {:stop, state}
+            end
 
           {:error, reason} ->
-            Logger.info("[LoginServer] Auth failed for #{username}: #{reason}")
-            cancel_timer(state.handshake_timer)
+            Logger.warning("[LoginServer] RSA decrypt failed for #{inspect(reason)}")
             fail = %LoginFail{reason: LoginFail.reason_access_failed()}
             send_raw(socket, Encoder.encode(fail))
             {:stop, state}
         end
 
-      {:error, reason} ->
-        Logger.warning("[LoginServer] RSA decrypt failed for #{inspect(reason)}")
+      {:error, :rate_limit_exceeded} ->
+        Logger.warn("[LoginServer] IP rate limit exceeded for #{inspect(state.client_ip)}")
         fail = %LoginFail{reason: LoginFail.reason_access_failed()}
         send_raw(socket, Encoder.encode(fail))
         {:stop, state}
@@ -294,4 +308,17 @@ defmodule L2E.LoginServer.ConnectionHandler do
 
   defp cancel_timer(nil), do: :ok
   defp cancel_timer(ref), do: Process.cancel_timer(ref)
+
+  # -----------------------------------------------------------------------
+  # IP extraction helper
+  # -----------------------------------------------------------------------
+
+  defp get_client_ip(socket) do
+    case ThousandIsland.Socket.remote_address(socket) do
+      {:ok, {ip, _port}} -> ip
+      {:error, _} -> {0, 0, 0, 0}
+    end
+  rescue
+    _ -> {0, 0, 0, 0}
+  end
 end

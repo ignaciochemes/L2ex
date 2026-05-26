@@ -104,6 +104,9 @@ defmodule L2E.Application do
       # Trade supervisor — manages ephemeral player-to-player trade processes
       L2E.Trade.Supervisor,
 
+      # M41: IP Rate Limiter for login server flood protection
+      L2E.LoginServer.IpRateLimiter,
+
       # Login Server — must start before game server so AccountStore is ready
       L2E.LoginServer.Supervisor,
 
