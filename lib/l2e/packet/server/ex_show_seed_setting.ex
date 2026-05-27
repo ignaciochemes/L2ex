@@ -48,20 +48,12 @@ defmodule L2E.Packet.Server.ExShowSeedSetting do
 
     seed_bin =
       Enum.map_join(list, "", fn e ->
-        <<e.seed_id || 0::little-32,
-          e.level || 1::little-32,
-          0x01::8,
-          e.reward1_id || 0::little-32,
-          0x01::8,
-          e.reward2_id || 0::little-32,
-          e.seed_limit || 0::little-32,
-          e.seed_reference_price || 0::little-32,
-          e.seed_min_price || 0::little-32,
-          e.seed_max_price || 0::little-32,
-          e.current_start_amount || 0::little-32,
-          e.current_price || 0::little-32,
-          e.next_start_amount || 0::little-32,
-          e.next_price || 0::little-32>>
+        <<e.seed_id || 0::little-32, e.level || 1::little-32, 0x01::8,
+          e.reward1_id || 0::little-32, 0x01::8, e.reward2_id || 0::little-32,
+          e.seed_limit || 0::little-32, e.seed_reference_price || 0::little-32,
+          e.seed_min_price || 0::little-32, e.seed_max_price || 0::little-32,
+          e.current_start_amount || 0::little-32, e.current_price || 0::little-32,
+          e.next_start_amount || 0::little-32, e.next_price || 0::little-32>>
       end)
 
     <<0xFE::8, 0x1F::little-16, castle_id::little-32, length(list)::little-32>> <> seed_bin

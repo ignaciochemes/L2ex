@@ -169,7 +169,10 @@ defmodule L2E.NPC.Instance do
       region_id: region_id,
       faction_id: faction_id,
       # M90: LoS gate for ranged NPC attacks; set false only in tests
-      npc_can_see: true
+      npc_can_see: true,
+      # M124: Walker patrol
+      patrol_path: nil,
+      patrol_index: 0
     }
 
     state =
@@ -180,7 +183,22 @@ defmodule L2E.NPC.Instance do
         state
       end
 
-    {:ok, state}
+    {:ok, state, {:continue, :after_init}}
+  end
+
+  @impl true
+  def handle_continue(:after_init, state) do
+    init_patrol(state)
+    {:noreply, state}
+  end
+
+  # M124: Register a patrol route if the template carries one.
+  defp init_patrol(state) do
+    patrol = Map.get(state.template, :patrol_route)
+
+    if is_list(patrol) and length(patrol) > 1 do
+      L2E.NPC.WalkingManager.register_patrol(self(), patrol)
+    end
   end
 
   # -----------------------------------------------------------------------
@@ -348,6 +366,32 @@ defmodule L2E.NPC.Instance do
   end
 
   def handle_cast({:apply_cc, _cc_type, _duration_ms}, state), do: {:noreply, state}
+
+  # M124: Advance patrol — move NPC to next waypoint and broadcast movement
+  def handle_cast({:advance_patrol, {nx, ny, nz}}, %{ai_state: :idle} = state) do
+    {ox, oy, oz} = state.position
+
+    move_pkt = %L2E.Packet.Server.CharMoveToLocation{
+      char_id: state.object_id,
+      x: nx,
+      y: ny,
+      z: nz,
+      origin_x: ox,
+      origin_y: oy,
+      origin_z: oz
+    }
+
+    if is_pid(state.region_pid) and Process.alive?(state.region_pid) do
+      GenServer.cast(state.region_pid, {:broadcast_packet, move_pkt})
+    end
+
+    {:noreply, %{state | position: {nx, ny, nz}}}
+  end
+
+  def handle_cast({:advance_patrol, _pos}, state) do
+    # Skip patrol movement while in combat, returning, or dead
+    {:noreply, state}
+  end
 
   # M49: Apply DoT
   def handle_cast({:apply_dot, _skill_id, damage_per_tick, tick_ms, ticks_left}, state) do

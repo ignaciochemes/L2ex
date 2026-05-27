@@ -104,7 +104,14 @@ defmodule L2E.Manor.Manager do
   end
 
   def handle_call({:set_crop_procure, castle_id, item_id, amount}, _from, state) do
-    entry = %{item_id: item_id, amount: amount, start_amount: amount, reward_type: 0, price: 0, period: 1}
+    entry = %{
+      item_id: item_id,
+      amount: amount,
+      start_amount: amount,
+      reward_type: 0,
+      price: 0,
+      period: 1
+    }
 
     existing = Map.get(state.procure, castle_id, [])
     updated = Enum.reject(existing, &(&1.item_id == item_id))

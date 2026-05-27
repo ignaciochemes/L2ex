@@ -4,8 +4,8 @@ defmodule L2E.DB.ClanCrest do
 
   @primary_key {:clan_id, :integer, autogenerate: false}
   schema "clan_crests" do
-    field :crest_data, :binary
-    field :large_crest_data, :binary
+    field(:crest_data, :binary)
+    field(:large_crest_data, :binary)
     timestamps()
   end
 

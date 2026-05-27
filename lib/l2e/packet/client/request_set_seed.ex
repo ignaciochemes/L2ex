@@ -14,7 +14,12 @@ defmodule L2E.Packet.Client.RequestSetSeed do
 
   defstruct castle_id: 0, entries: []
 
-  @type entry :: %{seed_id: integer(), amount: integer(), start_amount: integer(), price: integer()}
+  @type entry :: %{
+          seed_id: integer(),
+          amount: integer(),
+          start_amount: integer(),
+          price: integer()
+        }
   @type t :: %__MODULE__{castle_id: integer(), entries: [entry()]}
 
   @batch_length 12

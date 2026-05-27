@@ -46,7 +46,9 @@ defmodule L2E.NPC.Template do
     skills: [],
     # Movement AI
     can_walk: false,
-    wander_radius: 0
+    wander_radius: 0,
+    # M124: Optional patrol route — list of {x, y, z} tuples
+    patrol_route: nil
   ]
 
   @type t :: %__MODULE__{}

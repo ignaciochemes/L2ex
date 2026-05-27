@@ -4054,8 +4054,7 @@ defmodule L2E.Packet.Server.ExListPartyMatchingWaitingRoom do
 
         acc <>
           name_bin <>
-          <<Map.get(room, :class_id, 0)::little-32,
-            Map.get(room, :level, 1)::little-32>>
+          <<Map.get(room, :class_id, 0)::little-32, Map.get(room, :level, 1)::little-32>>
       end)
 
     <<0xFE::8, 0x0035::little-16, p.page::little-32, count::little-32, rooms_bin::binary>>

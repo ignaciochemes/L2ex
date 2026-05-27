@@ -1,22 +1,30 @@
 defmodule L2E.NPC.Supervisor do
   @moduledoc """
-  DynamicSupervisor for all live NPC.Instance processes.
+  Top-level supervisor for NPC subsystems.
 
-  Each spawned NPC gets a child process started here.
-  When an NPC dies it stops normally; SpawnTable schedules respawn.
+  Children:
+    - L2E.NPC.WalkingManager  — patrol route manager (M124)
+    - L2E.NPC.InstanceSupervisor — DynamicSupervisor for live NPC instances
   """
 
-  use DynamicSupervisor
+  use Supervisor
   require Logger
 
-  def start_link(_opts), do: DynamicSupervisor.start_link(__MODULE__, :ok, name: __MODULE__)
+  def start_link(_opts), do: Supervisor.start_link(__MODULE__, :ok, name: __MODULE__)
 
   @impl true
-  def init(:ok), do: DynamicSupervisor.init(strategy: :one_for_one)
+  def init(:ok) do
+    children = [
+      L2E.NPC.WalkingManager,
+      {DynamicSupervisor, strategy: :one_for_one, name: L2E.NPC.InstanceSupervisor}
+    ]
+
+    Supervisor.init(children, strategy: :one_for_one)
+  end
 
   @doc "Spawn a new NPC instance with a pre-built opts keyword list."
   def spawn_npc(opts) do
-    DynamicSupervisor.start_child(__MODULE__, {L2E.NPC.Instance, opts})
+    DynamicSupervisor.start_child(L2E.NPC.InstanceSupervisor, {L2E.NPC.Instance, opts})
   end
 
   @doc """
@@ -41,7 +49,7 @@ defmodule L2E.NPC.Supervisor do
           object_id: object_id
         ]
 
-        DynamicSupervisor.start_child(__MODULE__, {L2E.NPC.Instance, opts})
+        DynamicSupervisor.start_child(L2E.NPC.InstanceSupervisor, {L2E.NPC.Instance, opts})
     end
   end
 end

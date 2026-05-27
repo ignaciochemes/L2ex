@@ -51,21 +51,12 @@ defmodule L2E.Packet.Server.ExShowCropSetting do
 
     crop_bin =
       Enum.map_join(list, "", fn e ->
-        <<e.crop_id || 0::little-32,
-          e.level || 1::little-32,
-          0x01::8,
-          e.reward1_id || 0::little-32,
-          0x01::8,
-          e.reward2_id || 0::little-32,
-          e.crop_limit || 0::little-32,
-          0::little-32,
-          e.crop_min_price || 0::little-32,
-          e.crop_max_price || 0::little-32,
-          e.current_start_amount || 0::little-32,
-          e.current_price || 0::little-32,
-          e.current_reward || 0::8,
-          e.next_start_amount || 0::little-32,
-          e.next_price || 0::little-32,
+        <<e.crop_id || 0::little-32, e.level || 1::little-32, 0x01::8,
+          e.reward1_id || 0::little-32, 0x01::8, e.reward2_id || 0::little-32,
+          e.crop_limit || 0::little-32, 0::little-32, e.crop_min_price || 0::little-32,
+          e.crop_max_price || 0::little-32, e.current_start_amount || 0::little-32,
+          e.current_price || 0::little-32, e.current_reward || 0::8,
+          e.next_start_amount || 0::little-32, e.next_price || 0::little-32,
           e.next_reward || 0::8>>
       end)
 
