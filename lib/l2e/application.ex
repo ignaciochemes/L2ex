@@ -37,6 +37,9 @@ defmodule L2E.Application do
       # M72-B: Pet template data
       L2E.Data.PetDataTable,
 
+      # M104: Pet combat stats table (max_hp, max_mp, p_atk per npc_id)
+      {L2E.Data.PetTable, []},
+
       # GlobalVariables: server-wide persistent KV store — before any system that reads world state
       L2E.World.GlobalVariables,
 

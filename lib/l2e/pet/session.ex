@@ -58,6 +58,16 @@ defmodule L2E.Pet.Session do
 
     owner_ref = Process.monitor(owner_pid)
 
+    # Look up combat stats from PetTable; fall back to safe defaults
+    pet_template =
+      case L2E.Data.PetTable.get(npc_id) do
+        {:ok, tpl} ->
+          tpl
+
+        :error ->
+          %{max_hp: 100.0, max_mp: 50.0, p_atk: 20.0, food_item_id: 2515, hungry_limit: 10}
+      end
+
     # Start follow, hunger, and regen timers
     follow_timer = Process.send_after(self(), :follow_tick, @follow_tick_ms)
     hunger_timer = Process.send_after(self(), :hunger_tick, @hunger_tick_ms)
@@ -73,10 +83,10 @@ defmodule L2E.Pet.Session do
       heading: 0,
       # Stats
       level: 1,
-      hp: 100.0,
-      max_hp: 100.0,
-      mp: 100.0,
-      max_mp: 100.0,
+      hp: pet_template.max_hp,
+      max_hp: pet_template.max_hp,
+      mp: pet_template.max_mp,
+      max_mp: pet_template.max_mp,
       exp: 0,
       sp: 0,
       # Pet state
@@ -92,13 +102,48 @@ defmodule L2E.Pet.Session do
       # Combat
       in_combat: false,
       current_target_pid: nil,
-      attack_timer: nil
+      attack_timer: nil,
+      # Region process this pet currently belongs to (for AOI broadcasts)
+      region_pid: nil
     }
 
     # Announce this pet to the world so nearby players can see it on summon.
     Phoenix.PubSub.broadcast(L2E.PubSub, "world:pets", {:pet_spawned, state})
 
-    {:ok, state}
+    {:ok, state, {:continue, :summon_broadcast}}
+  end
+
+  @impl GenServer
+  def handle_continue(:summon_broadcast, state) do
+    # Get owner's position to locate the region, then broadcast PetInfo there.
+    new_state =
+      try do
+        case GenServer.call(state.owner_pid, :get_position, 500) do
+          {:ok, ox, oy, oz} ->
+            region_pid = L2E.World.Region.get_or_start({ox, oy, oz})
+
+            pet_info = %{
+              obj_id: state.pet_item_obj_id,
+              npc_id: state.npc_id,
+              position: {ox, oy, oz},
+              hp: state.hp,
+              max_hp: state.max_hp,
+              mp: state.mp,
+              max_mp: state.max_mp,
+              level: state.level
+            }
+
+            GenServer.cast(region_pid, {:summon_pet, self(), pet_info})
+            %{state | region_pid: region_pid, position: {ox, oy, oz}}
+
+          _ ->
+            state
+        end
+      catch
+        _, _ -> state
+      end
+
+    {:noreply, new_state}
   end
 
   @impl GenServer
@@ -256,6 +301,14 @@ defmodule L2E.Pet.Session do
                 "world:pets",
                 {:pet_moved, self(), new_x, new_y, oz}
               )
+
+              if state.region_pid != nil do
+                GenServer.cast(
+                  state.region_pid,
+                  {:pet_moved, self(),
+                   %{obj_id: state.pet_item_obj_id, x: new_x, y: new_y, z: oz}}
+                )
+              end
 
               %{state | position: {new_x, new_y, oz}}
             else

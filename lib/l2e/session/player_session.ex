@@ -51,6 +51,7 @@ defmodule L2E.Session.PlayerSession do
   alias L2E.Duel.Manager, as: DuelManager
   alias L2E.Olympiad.Manager, as: OlympiadManager
   alias L2E.Siege.Manager, as: SiegeManager
+  alias L2E.GrandBoss.Manager, as: GrandBossManager
   alias L2E.Pet.Supervisor, as: PetSupervisor
 
   # Respawn delay after death (ms)
@@ -234,7 +235,9 @@ defmodule L2E.Session.PlayerSession do
       cc_id: nil,
       # M86: Fishing state
       fishing: false,
-      fishing_pid: nil
+      fishing_pid: nil,
+      # M99: Grand Boss zone lock — boss NPC id if player is currently inside a boss instance
+      boss_zone_id: nil
     }
 
     {:ok, state}
@@ -1920,6 +1923,29 @@ defmodule L2E.Session.PlayerSession do
     end)
   end
 
+  def handle_info({:siege_announcement, message}, state) do
+    send(
+      state.conn_pid,
+      {:send_packet,
+       %Server.CreatureSay{char_id: 0, chat_type: 0, char_name: "Siege", message: message}}
+    )
+
+    {:noreply, state}
+  end
+
+  def handle_info({:clan_war_notification, message}, state) do
+    pkt = %Server.CreatureSay{char_id: 0, chat_type: 2, char_name: "System", message: message}
+    send(state.conn_pid, {:send_packet, pkt})
+    {:noreply, state}
+  end
+
+  # ---- M102: Olympiad arena UI packets --------------------------------------
+
+  def handle_info({:send_olympiad_ui_packet, pkt}, state) do
+    send(state.conn_pid, {:send_packet, pkt})
+    {:noreply, state}
+  end
+
   def handle_info(msg, state) do
     Logger.debug("[PlayerSession] Unexpected message: #{inspect(msg)}")
     {:noreply, state}
@@ -2307,6 +2333,33 @@ defmodule L2E.Session.PlayerSession do
     heroes = L2E.DB.Hero.active_heroes()
     is_hero = Enum.any?(heroes, fn h -> h.char_id == char_id end)
     send(state.conn_pid, {:send_packet, %L2E.Packet.Server.ExHeroList{heroes: heroes}})
+
+    # M101: Send clan war list if player belongs to a clan
+    if state.clan_id not in [0, nil] do
+      case Clan.find_by_id(state.clan_id) do
+        nil ->
+          :ok
+
+        clan_pid ->
+          wars = Clan.get_wars(clan_pid)
+
+          war_entries =
+            Enum.map(wars, fn {enemy_id, war} ->
+              enemy_name =
+                case Clan.find_by_id(enemy_id) do
+                  nil -> "Unknown"
+                  ep -> Map.get(Clan.get_info(ep), :clan_name, "Unknown")
+                end
+
+              {enemy_id, enemy_name, war.defender_kills, war.attacker_kills, war.state == :mutual}
+            end)
+
+          send(
+            state.conn_pid,
+            {:send_packet, %Server.PledgeReceiveWarList{wars: war_entries}}
+          )
+      end
+    end
 
     Logger.info(
       "[PlayerSession] #{char_name} (id=#{char_id}) entered the world (class=#{state.class_id}, level=#{state.level})"
@@ -4675,6 +4728,58 @@ defmodule L2E.Session.PlayerSession do
 
   defp handle_packet(%Client.RequestJoinSiege{}, state), do: {:noreply, state}
 
+  defp handle_packet(
+         %Client.RequestSiegeAttackerList{castle_id: castle_id},
+         %{auth_state: :in_world} = state
+       ) do
+    info = L2E.Siege.Castle.get_info(castle_id)
+
+    clans =
+      case info do
+        %{registered_attackers: set} ->
+          MapSet.to_list(set)
+          |> Enum.map(fn clan_id -> {clan_id, "Clan #{clan_id}", 0, "", 0, 1} end)
+
+        _ ->
+          []
+      end
+
+    send(
+      state.conn_pid,
+      {:send_packet, %Server.SiegeAttackerList{castle_id: castle_id, clans: clans}}
+    )
+
+    {:noreply, state}
+  end
+
+  defp handle_packet(%Client.RequestSiegeAttackerList{}, state), do: {:noreply, state}
+
+  defp handle_packet(
+         %Client.RequestSiegeDefenderList{castle_id: castle_id},
+         %{auth_state: :in_world} = state
+       ) do
+    info = L2E.Siege.Castle.get_info(castle_id)
+
+    clans =
+      case info do
+        %{registered_defenders: set} ->
+          MapSet.to_list(set)
+          |> Enum.map(fn clan_id -> {clan_id, "Clan #{clan_id}", 0, "", 0, 1} end)
+
+        _ ->
+          []
+      end
+
+    send(
+      state.conn_pid,
+      {:send_packet, %Server.SiegeDefenderList{castle_id: castle_id, clans: clans}}
+    )
+
+    {:noreply, state}
+  end
+
+  defp handle_packet(%Client.RequestSiegeDefenderList{}, state), do: {:noreply, state}
+
   # ---- M72: Pet ---------------------------------------------------------------
 
   defp handle_packet(%Client.RequestPetUseItem{object_id: object_id}, state) do
@@ -5408,6 +5513,9 @@ defmodule L2E.Session.PlayerSession do
     {:noreply, state}
   end
 
+  # M99: Grand Boss gate — wire check_grand_boss_entry/2 here when boss teleporter NPCs are added
+  # TODO: wire check_grand_boss_entry/2 when boss teleporter NPCs are added
+
   # M25: Teleport bypass — "teleport_x_y_z_fee"
   defp handle_npc_bypass(_npc_id, "teleport_" <> rest, state) do
     case String.split(rest, "_") do
@@ -5497,6 +5605,30 @@ defmodule L2E.Session.PlayerSession do
   end
 
   defp handle_npc_bypass(_npc_id, _action, state), do: {:noreply, state}
+
+  # M99: Grand Boss zone entry gate
+  # Returns {:ok, new_state} if entry is allowed, {:denied, state} otherwise.
+  defp check_grand_boss_entry(boss_npc_id, state) do
+    case GrandBossManager.can_enter?(boss_npc_id) do
+      true ->
+        GrandBossManager.enter_instance(boss_npc_id, state.char_id)
+        {:ok, %{state | boss_zone_id: boss_npc_id}}
+
+      false ->
+        send(
+          state.conn_pid,
+          {:send_packet,
+           %Server.CreatureSay{
+             char_id: 0,
+             chat_type: 2,
+             char_name: "System",
+             message: "You may not enter the boss lair at this time."
+           }}
+        )
+
+        {:denied, state}
+    end
+  end
 
   # Execute a teleport: leave current region, move to new coords, enter new region
   defp do_teleport({x, y, z}, state) do
@@ -6050,6 +6182,10 @@ defmodule L2E.Session.PlayerSession do
   # M96: Save pet on player logout/crash
   @impl GenServer
   def terminate(_reason, state) do
+    if state.boss_zone_id != nil do
+      GrandBossManager.leave_instance(state.boss_zone_id)
+    end
+
     if state.pet_pid != nil do
       GenServer.stop(state.pet_pid, :normal)
     end

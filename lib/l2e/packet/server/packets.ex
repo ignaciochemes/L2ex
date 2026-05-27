@@ -2854,6 +2854,78 @@ defmodule L2E.Packet.Server.SiegeInfo do
   end
 end
 
+# ---- M100: Siege attacker/defender lists -------------------------------------
+
+defmodule L2E.Packet.Server.SiegeAttackerList do
+  @moduledoc """
+  Opcode 0xCA — lists all attacker clans registered for a siege.
+
+  clans: [{clan_id, clan_name, ally_id, ally_name, party_count, member_count}]
+  """
+  @behaviour L2E.Packet.Encodable
+
+  @opcode 0xCA
+
+  defstruct [:castle_id, clans: []]
+
+  @impl L2E.Packet.Encodable
+  def encode(%__MODULE__{castle_id: castle_id, clans: clans}) do
+    count = length(clans)
+
+    clan_data =
+      Enum.reduce(clans, <<>>, fn {clan_id, clan_name, ally_id, ally_name, _parties, members},
+                                  acc ->
+        acc <>
+          <<clan_id::little-32>> <>
+          utf16le_string(clan_name) <>
+          <<ally_id::little-32>> <>
+          utf16le_string(ally_name) <>
+          <<0::little-32, members::little-32>>
+      end)
+
+    <<@opcode::8, castle_id::little-32, count::little-32, count::little-32>> <> clan_data
+  end
+
+  defp utf16le_string(str) do
+    :unicode.characters_to_binary(str || "", :utf8, {:utf16, :little}) <> <<0::16>>
+  end
+end
+
+defmodule L2E.Packet.Server.SiegeDefenderList do
+  @moduledoc """
+  Opcode 0xCB — lists all defender clans registered for a siege.
+
+  clans: [{clan_id, clan_name, ally_id, ally_name, party_count, member_count}]
+  """
+  @behaviour L2E.Packet.Encodable
+
+  @opcode 0xCB
+
+  defstruct [:castle_id, clans: []]
+
+  @impl L2E.Packet.Encodable
+  def encode(%__MODULE__{castle_id: castle_id, clans: clans}) do
+    count = length(clans)
+
+    clan_data =
+      Enum.reduce(clans, <<>>, fn {clan_id, clan_name, ally_id, ally_name, _parties, members},
+                                  acc ->
+        acc <>
+          <<clan_id::little-32>> <>
+          utf16le_string(clan_name) <>
+          <<ally_id::little-32>> <>
+          utf16le_string(ally_name) <>
+          <<0::little-32, members::little-32>>
+      end)
+
+    <<@opcode::8, castle_id::little-32, count::little-32, count::little-32>> <> clan_data
+  end
+
+  defp utf16le_string(str) do
+    :unicode.characters_to_binary(str || "", :utf8, {:utf16, :little}) <> <<0::16>>
+  end
+end
+
 # ---- FASE 3: Duel packets (0xFE extended) ------------------------------------
 
 defmodule L2E.Packet.Server.ExDuelAskStart do
@@ -3258,5 +3330,109 @@ defmodule L2E.Packet.Server.ExOlympiadRegistration do
   def encode(%__MODULE__{registered: registered, player_count: player_count}) do
     reg_int = if registered, do: 1, else: 0
     <<0xFE::8, 0x003C::little-16, reg_int::little-32, player_count || 0::little-32>>
+  end
+end
+
+# ---- M101: Clan Wars UI -------------------------------------------------------
+
+defmodule L2E.Packet.Server.PledgeReceiveWarList do
+  @moduledoc """
+  Opcode 0x85 — sends the list of active clan wars to the client on enter world.
+
+  wars: list of {enemy_clan_id, enemy_clan_name, their_kills, my_kills, is_mutual}
+
+  Binary layout (PledgeReceiveWarList.java):
+    opcode(8) count(32LE) [enemy_id(32LE) enemy_name(utf16le) their_kills(32LE) my_kills(32LE) flags(32LE)]*
+
+  Reference: ServerPackets.PLEDGE_RECEIVE_WAR_LIST(0x85)
+  """
+  @behaviour L2E.Packet.Encodable
+
+  defstruct [:wars]
+  @type t :: %__MODULE__{}
+
+  @opcode 0x85
+
+  @impl L2E.Packet.Encodable
+  def encode(%__MODULE__{wars: wars}) do
+    wars = wars || []
+    count = length(wars)
+
+    war_data =
+      Enum.map_join(wars, "", fn {enemy_id, enemy_name, their_kills, my_kills, is_mutual} ->
+        name_bin =
+          :unicode.characters_to_binary(enemy_name || "", :utf8, {:utf16, :little}) <> <<0::16>>
+
+        flags = if is_mutual, do: 1, else: 0
+
+        <<enemy_id::little-32, name_bin::binary, their_kills::little-32, my_kills::little-32,
+          flags::little-32>>
+      end)
+
+    <<@opcode::8, count::little-32, war_data::binary>>
+  end
+end
+
+# ---- M102: Olympiad Arena UI -------------------------------------------------
+
+defmodule L2E.Packet.Server.ExOlympiadUserInfo do
+  @moduledoc """
+  0xFE/0x3D — shows the opponent's HP/MP bar in the arena UI.
+
+  side: 1 = blue (challenger), 2 = red (defender)
+
+  Binary layout:
+    0xFE(8)  sub_opcode(16LE=0x3D)
+    char_id(32LE)  char_name(utf16le null-terminated)
+    class_id(32LE)  cur_hp(32LE)  max_hp(32LE)
+    cur_mp(32LE)  max_mp(32LE)  level(32LE)  side(32LE)
+  """
+  @behaviour L2E.Packet.Encodable
+
+  defstruct [:char_id, :char_name, :class_id, :cur_hp, :max_hp, :cur_mp, :max_mp, :level, :side]
+
+  @impl L2E.Packet.Encodable
+  def encode(%__MODULE__{} = p) do
+    name_bytes =
+      :unicode.characters_to_binary((p.char_name || "") <> "\0", :utf8, {:utf16, :little})
+
+    cur_hp = trunc(p.cur_hp || 0)
+    max_hp = trunc(p.max_hp || 1)
+    cur_mp = trunc(p.cur_mp || 0)
+    max_mp = trunc(p.max_mp || 1)
+
+    <<0xFE::8, 0x3D::little-16, p.char_id::little-32, name_bytes::binary,
+      p.class_id || 0::little-32, cur_hp::little-32, max_hp::little-32, cur_mp::little-32,
+      max_mp::little-32, p.level || 1::little-32, p.side || 1::little-32>>
+  end
+end
+
+defmodule L2E.Packet.Server.ExOlympiadSpelledInfo do
+  @moduledoc """
+  0xFE/0x3E — shows the opponent's active buffs in the arena UI.
+
+  effects: list of {skill_id, skill_level, duration_ms} tuples.
+
+  Binary layout:
+    0xFE(8)  sub_opcode(16LE=0x3E)
+    target_char_id(32LE)  count(32LE)
+    [skill_id(32LE)  skill_level(32LE)  duration_ms(32LE)]*
+  """
+  @behaviour L2E.Packet.Encodable
+
+  defstruct [:target_char_id, :effects]
+
+  @impl L2E.Packet.Encodable
+  def encode(%__MODULE__{} = p) do
+    effects = p.effects || []
+    count = length(effects)
+
+    effects_bin =
+      Enum.map_join(effects, "", fn {skill_id, skill_level, duration_ms} ->
+        <<skill_id::little-32, skill_level::little-32, duration_ms::little-32>>
+      end)
+
+    <<0xFE::8, 0x3E::little-16, p.target_char_id || 0::little-32, count::little-32,
+      effects_bin::binary>>
   end
 end

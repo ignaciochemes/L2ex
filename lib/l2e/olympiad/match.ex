@@ -98,6 +98,50 @@ defmodule L2E.Olympiad.Match do
     send(state.player1.pid, {:olympiad_arena_teleport, x, y, z})
     send(state.player2.pid, {:olympiad_arena_teleport, x, y, z})
 
+    # Activate arena UI on both clients
+    send(
+      state.player1.pid,
+      {:send_olympiad_ui_packet, %L2E.Packet.Server.ExOlympiadMode{mode: 1}}
+    )
+
+    send(
+      state.player2.pid,
+      {:send_olympiad_ui_packet, %L2E.Packet.Server.ExOlympiadMode{mode: 1}}
+    )
+
+    # Show opponent HP bar (placeholder stats — player structs only carry char_id/name/class)
+    send(
+      state.player1.pid,
+      {:send_olympiad_ui_packet,
+       %L2E.Packet.Server.ExOlympiadUserInfo{
+         char_id: state.player2.char_id,
+         char_name: state.player2.char_name || "Opponent",
+         class_id: state.player2.class_id || 0,
+         cur_hp: 100,
+         max_hp: 100,
+         cur_mp: 50,
+         max_mp: 50,
+         level: 1,
+         side: 2
+       }}
+    )
+
+    send(
+      state.player2.pid,
+      {:send_olympiad_ui_packet,
+       %L2E.Packet.Server.ExOlympiadUserInfo{
+         char_id: state.player1.char_id,
+         char_name: state.player1.char_name || "Opponent",
+         class_id: state.player1.class_id || 0,
+         cur_hp: 100,
+         max_hp: 100,
+         cur_mp: 50,
+         max_mp: 50,
+         level: 1,
+         side: 1
+       }}
+    )
+
     timeout_ref = Process.send_after(self(), :match_timeout, @match_timeout_ms)
     {:noreply, %{state | status: :active, timeout_ref: timeout_ref}}
   end

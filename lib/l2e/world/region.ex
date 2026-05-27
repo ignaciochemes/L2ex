@@ -192,6 +192,51 @@ defmodule L2E.World.Region do
     {:noreply, state}
   end
 
+  # Pet summoned — broadcast PetInfo to all players in region
+  def handle_cast({:summon_pet, _pet_pid, pet_info}, state) do
+    {x, y, z} = pet_info.position
+
+    pkt = %L2E.Packet.Server.PetInfo{
+      summon_type: 2,
+      obj_id: pet_info.obj_id,
+      npc_id: pet_info.npc_id,
+      x: x,
+      y: y,
+      z: z,
+      has_owner: 1,
+      cur_hp: trunc(pet_info.hp),
+      max_hp: trunc(pet_info.max_hp),
+      cur_mp: trunc(pet_info.mp),
+      max_mp: trunc(pet_info.max_mp),
+      level: pet_info.level
+    }
+
+    for {pid, _} <- state.entities do
+      send(pid, {:send_packet, pkt})
+    end
+
+    {:noreply, state}
+  end
+
+  # Pet moved — broadcast CharMoveToLocation to all players in region
+  def handle_cast({:pet_moved, _pet_pid, pos}, state) do
+    pkt = %L2E.Packet.Server.CharMoveToLocation{
+      char_id: pos.obj_id,
+      x: pos.x,
+      y: pos.y,
+      z: pos.z,
+      origin_x: 0,
+      origin_y: 0,
+      origin_z: 0
+    }
+
+    for {pid, _} <- state.entities do
+      send(pid, {:send_packet, pkt})
+    end
+
+    {:noreply, state}
+  end
+
   # M18: Drop an item on the ground — broadcast SpawnItem to all players
   def handle_cast({:drop_item, object_id, item_id, x, y, z, count}, state) do
     alias L2E.Packet.Server

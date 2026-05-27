@@ -158,6 +158,9 @@ defmodule L2E.Packet.Decoder do
   # M71: Siege
   def decode(0x47, body), do: Client.RequestSiegeInfo.decode(body)
   def decode(0xB2, body), do: Client.RequestJoinSiege.decode(body)
+  # M100: Siege attacker/defender lists
+  def decode(0xBD, body), do: Client.RequestSiegeAttackerList.decode(body)
+  def decode(0xBE, body), do: Client.RequestSiegeDefenderList.decode(body)
 
   # M72: Pet
   def decode(0x8A, body), do: Client.RequestPetUseItem.decode(body)

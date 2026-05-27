@@ -98,6 +98,14 @@ defmodule L2E.Siege.Castle do
   def start_siege(castle_id),
     do: GenServer.cast(via(castle_id), :start_siege_manual)
 
+  @doc "Record a kill by an attacker clan during an active siege."
+  def record_kill(castle_id, attacker_clan_id) do
+    case Registry.lookup(L2E.Siege.Registry, {:castle, castle_id}) do
+      [{pid, _}] -> GenServer.cast(pid, {:record_kill, attacker_clan_id})
+      [] -> :ok
+    end
+  end
+
   @doc "Enter preparation phase and schedule siege start."
   def schedule_siege(castle_id),
     do: GenServer.cast(via(castle_id), :schedule_siege)
@@ -129,7 +137,9 @@ defmodule L2E.Siege.Castle do
       siege_end_timer: nil,
       registered_attackers: MapSet.new(),
       registered_defenders: MapSet.new(),
-      relics_held_by: nil
+      relics_held_by: nil,
+      # %{clan_id => kill_count} — tracked during :in_siege phase
+      kill_scores: %{}
     }
 
     Logger.info("[Castle] #{castle_name} (id=#{castle_id}) initialized.")
@@ -200,8 +210,22 @@ defmodule L2E.Siege.Castle do
 
   def handle_cast({:door_destroyed, door_id}, state) do
     Logger.info("[Castle] #{state.castle_name} door #{door_id} destroyed during siege.")
+
+    Phoenix.PubSub.broadcast(
+      L2E.PubSub,
+      "world:siege_#{state.castle_id}",
+      {:siege_announcement, "A door at #{state.castle_name} has been destroyed!"}
+    )
+
     {:noreply, state}
   end
+
+  def handle_cast({:record_kill, attacker_clan_id}, %{siege_state: :in_siege} = state) do
+    new_scores = Map.update(state.kill_scores, attacker_clan_id, 1, &(&1 + 1))
+    {:noreply, %{state | kill_scores: new_scores}}
+  end
+
+  def handle_cast({:record_kill, _}, state), do: {:noreply, state}
 
   # ---- State machine handle_info transitions ----
 

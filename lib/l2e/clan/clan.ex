@@ -560,6 +560,22 @@ defmodule L2E.Clan do
           {:war_declared, state.clan_id, target_clan_id}
         )
 
+        # Notify online clan members
+        enemy_name =
+          case find_by_id(target_clan_id) do
+            nil -> "clan ##{target_clan_id}"
+            ep -> Map.get(get_info(ep), :clan_name, "clan ##{target_clan_id}")
+          end
+
+        Enum.each(state.members, fn {_id, m} ->
+          if m.pid,
+            do:
+              send(
+                m.pid,
+                {:clan_war_notification, "Your clan has declared war on #{enemy_name}!"}
+              )
+        end)
+
         {:reply, :ok, new_state}
     end
   end
@@ -593,6 +609,17 @@ defmodule L2E.Clan do
           "clan:#{state.clan_id}",
           {:war_mutual, state.clan_id, attacker_clan_id}
         )
+
+        # Notify online clan members
+        Enum.each(state.members, fn {_id, m} ->
+          if m.pid,
+            do:
+              send(
+                m.pid,
+                {:clan_war_notification,
+                 "Your clan is now at mutual war with clan ##{attacker_clan_id}!"}
+              )
+        end)
 
         {:reply, :ok, new_state}
 
@@ -632,6 +659,16 @@ defmodule L2E.Clan do
           "clan:#{state.clan_id}",
           {:war_surrender, state.clan_id, to_clan_id}
         )
+
+        # Notify online clan members
+        Enum.each(state.members, fn {_id, m} ->
+          if m.pid,
+            do:
+              send(
+                m.pid,
+                {:clan_war_notification, "Your clan's war with clan ##{to_clan_id} has ended."}
+              )
+        end)
 
         {:reply, :ok, new_state}
     end
