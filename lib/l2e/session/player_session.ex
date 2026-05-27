@@ -237,7 +237,12 @@ defmodule L2E.Session.PlayerSession do
       fishing: false,
       fishing_pid: nil,
       # M99: Grand Boss zone lock — boss NPC id if player is currently inside a boss instance
-      boss_zone_id: nil
+      boss_zone_id: nil,
+      # M113: Seven Signs Quest participation
+      ssq_cabal: nil,
+      ssq_score: 0,
+      # M114: Recipe shop crafting stall
+      recipe_shop: nil
     }
 
     {:ok, state}
@@ -279,6 +284,12 @@ defmodule L2E.Session.PlayerSession do
       else
         max(0.0, raw_hp)
       end
+
+    # M112: 10% HP threshold — end duel early (only when HP is above the clamp floor)
+    if state.active_duel_id && new_hp > 1.0 && state.max_hp > 0 &&
+         new_hp / state.max_hp <= 0.1 do
+      L2E.Duel.Session.notify_hp_update(state.active_duel_id, self(), new_hp, state.max_hp)
+    end
 
     new_state = %{state | hp: new_hp}
 
@@ -2005,6 +2016,25 @@ defmodule L2E.Session.PlayerSession do
     {:noreply, state}
   end
 
+  # ---- M113: Seven Signs period change notification ----
+
+  def handle_info({:ssq_period_changed, period, _cycle}, state) do
+    msg =
+      case period do
+        1 -> "The Seven Signs competition period has begun! Register with a Priest of Dawn or Dusk."
+        2 -> "The Seven Signs competition has ended. The Seal Validation period has started."
+        _ -> "The Seven Signs period has changed."
+      end
+
+    send(
+      state.conn_pid,
+      {:send_packet,
+       %Server.CreatureSay{char_id: 0, chat_type: 2, char_name: "System", message: msg}}
+    )
+
+    {:noreply, state}
+  end
+
   def handle_info(msg, state) do
     Logger.debug("[PlayerSession] Unexpected message: #{inspect(msg)}")
     {:noreply, state}
@@ -2389,6 +2419,9 @@ defmodule L2E.Session.PlayerSession do
 
     # M76: Subscribe to hero election broadcasts and send current hero list
     Phoenix.PubSub.subscribe(L2E.PubSub, "world:olympiad")
+
+    # M113: Subscribe to Seven Signs period change broadcasts
+    Phoenix.PubSub.subscribe(L2E.PubSub, "world:ssq")
     heroes = L2E.DB.Hero.active_heroes()
     is_hero = Enum.any?(heroes, fn h -> h.char_id == char_id end)
     send(state.conn_pid, {:send_packet, %L2E.Packet.Server.ExHeroList{heroes: heroes}})
@@ -2468,12 +2501,23 @@ defmodule L2E.Session.PlayerSession do
       )
     end
 
+    # M112: Duel zone boundary check
+    if state.active_duel_id do
+      L2E.Duel.Session.notify_move(state.active_duel_id, self(), move.x, move.y, move.z)
+    end
+
     {:noreply, new_state}
   end
 
   defp handle_packet(%L2E.Packet.Client.ValidatePosition{x: x, y: y, z: z, heading: h}, state) do
     new_zone = ZoneTable.zone_type_at(x, y, z)
     state = handle_zone_change(state, new_zone)
+
+    # M112: Duel zone boundary check
+    if state.active_duel_id do
+      L2E.Duel.Session.notify_move(state.active_duel_id, self(), x, y, z)
+    end
+
     {:noreply, %{state | position: {x, y, z}, heading: h}}
   end
 
@@ -3226,9 +3270,97 @@ defmodule L2E.Session.PlayerSession do
 
   defp handle_packet(%L2E.Packet.Client.RequestGotoLobby{}, state), do: {:noreply, state}
 
-  # ---- RequestSSQStatus (0xC7) — M61-B: Seven Signs Quest status panel ----
-  # SSQStatus server packet not yet implemented; log and ignore until M61-C.
+  # ---- M114: Recipe Book & Crafting Stall ----
+
+  defp handle_packet(%L2E.Packet.Client.RequestRecipeBookOpen{is_dwarven: is_dwarven}, state) do
+    recipes = L2E.Inventory.get_recipes(state.char_id, is_dwarven)
+    max_mp = Map.get(state, :max_mp, 100)
+    pkt = %Server.RecipeBookItemList{is_dwarven: is_dwarven, max_mp: max_mp, recipes: recipes}
+    send(state.conn_pid, {:send_packet, pkt})
+    {:noreply, state}
+  end
+
+  defp handle_packet(%L2E.Packet.Client.RequestRecipeShopManageList{}, state) do
+    recipes = L2E.Inventory.get_recipes(state.char_id, true)
+    pkt = %Server.RecipeShopManageList{
+      seller_id: state.char_id,
+      adena: Map.get(state, :adena, 0),
+      is_dwarven: true,
+      book_recipes: recipes,
+      shop_items: Map.get(state.recipe_shop || %{}, :recipes, [])
+    }
+    send(state.conn_pid, {:send_packet, pkt})
+    {:noreply, state}
+  end
+
+  defp handle_packet(%L2E.Packet.Client.RequestRecipeShopListSet{recipes: recipes}, state) do
+    new_state = %{state | recipe_shop: %{recipes: recipes}}
+    # Broadcast stall title to nearby players
+    title = Map.get(state, :char_name, "Crafting")
+    send(state.conn_pid, {:send_packet, %Server.RecipeShopMsg{
+      object_id: state.char_id,
+      title: title
+    }})
+    {:noreply, new_state}
+  end
+
+  defp handle_packet(%L2E.Packet.Client.RequestRecipeShopManageQuit{}, state) do
+    {:noreply, %{state | recipe_shop: nil}}
+  end
+
+  defp handle_packet(
+         %L2E.Packet.Client.RequestRecipeShopMakeInfo{
+           shop_object_id: shop_id,
+           recipe_id: recipe_id
+         },
+         state
+       ) do
+    {current_mp, max_mp} = {Map.get(state, :current_mp, 100), Map.get(state, :max_mp, 100)}
+    pkt = %Server.RecipeShopItemInfo{
+      manufacturer_id: shop_id,
+      recipe_id: recipe_id,
+      current_mp: current_mp,
+      max_mp: max_mp
+    }
+    send(state.conn_pid, {:send_packet, pkt})
+    {:noreply, state}
+  end
+
+  defp handle_packet(
+         %L2E.Packet.Client.RequestRecipeShopMakeItem{
+           shop_object_id: _shop_id,
+           recipe_id: recipe_id
+         },
+         state
+       ) do
+    # Stub: crafting logic TBD in manufacturing milestone
+    Logger.debug("[PlayerSession] Recipe shop craft requested: recipe_id=#{recipe_id}")
+    {:noreply, state}
+  end
+
+  # ---- M115: Castle Manor System ----
+
+  defp handle_packet(%L2E.Packet.Client.RequestManorList{}, state) do
+    castles = L2E.Manor.Manager.get_castles()
+    pkt = %Server.ExSendManorList{castles: castles}
+    send(state.conn_pid, {:send_packet, pkt})
+    {:noreply, state}
+  end
+
+  # ---- RequestSSQStatus (0xC7) — M113: Seven Signs status panel ----
   defp handle_packet(%L2E.Packet.Client.RequestSSQStatus{page: _page}, state) do
+    {period, _cycle} = L2E.SevenSigns.Manager.get_period()
+    scores = L2E.SevenSigns.Manager.get_scores()
+
+    pkt = %Server.SSQInfo{
+      period: period,
+      dawn_score: scores.dawn,
+      dusk_score: scores.dusk,
+      player_cabal: Map.get(state, :ssq_cabal, nil),
+      player_score: Map.get(state, :ssq_score, 0)
+    }
+
+    send(state.conn_pid, {:send_packet, pkt})
     {:noreply, state}
   end
 
@@ -4683,10 +4815,31 @@ defmodule L2E.Session.PlayerSession do
           case Registry.lookup(L2E.Session.Registry, inviter_id) do
             [{inviter_pid, _}] ->
               duel_id = DuelManager.new_duel_id()
-              L2E.Duel.Supervisor.start_duel(duel_id, inviter_pid, self())
 
-              send(inviter_pid, {:duel_start, duel_id, party_duel})
-              send(self(), {:duel_start, duel_id, party_duel})
+              # M112: Collect party member pids for party duel mode
+              {attacker_members, defender_members} =
+                if party_duel do
+                  att =
+                    case L2E.Party.find(inviter_id) do
+                      nil -> [inviter_pid]
+                      party_pid -> L2E.Party.get_member_pids(party_pid)
+                    end
+
+                  def_members = get_party_member_pids(state)
+                  {att, def_members}
+                else
+                  {[inviter_pid], [self()]}
+                end
+
+              L2E.Duel.Supervisor.start_duel(duel_id, inviter_pid, self(),
+                party_duel: party_duel,
+                attacker_members: attacker_members,
+                defender_members: defender_members
+              )
+
+              # Notify all participants on both sides
+              Enum.each(attacker_members, &send(&1, {:duel_start, duel_id, party_duel}))
+              Enum.each(defender_members, &send(&1, {:duel_start, duel_id, party_duel}))
 
             [] ->
               Logger.debug("[PlayerSession] DuelAnswer: inviter #{inviter_id} not online")
@@ -4705,6 +4858,14 @@ defmodule L2E.Session.PlayerSession do
       duel_id ->
         L2E.Duel.Session.surrender(duel_id, state.char_id)
         {:noreply, state}
+    end
+  end
+
+  # M112: Returns PIDs of all party members, or [self()] if not in a party
+  defp get_party_member_pids(state) do
+    case state.party_pid do
+      nil -> [self()]
+      pid -> L2E.Party.get_member_pids(pid)
     end
   end
 
@@ -5097,6 +5258,29 @@ defmodule L2E.Session.PlayerSession do
   end
 
   defp handle_packet(%Client.RequestExEnchantSkill{}, state), do: {:noreply, state}
+
+  # ---- RequestDlgAnswer (0xC5) — player responds to a YES/NO confirm dialog --
+
+  defp handle_packet(%Client.RequestDlgAnswer{answer: answer}, state) do
+    case state.pending_dialog do
+      nil ->
+        {:noreply, state}
+
+      {:enchant_over_limit, _item_oid, _scroll_oid} when answer != 1 ->
+        {:noreply, %{state | pending_dialog: nil}}
+
+      _ ->
+        # Generic: unknown dialog type or declined — clear and move on
+        {:noreply, %{state | pending_dialog: nil}}
+    end
+  end
+
+  # ---- Tutorial packet stubs (0x7B–0x7E) — client-side tutorial, no server logic --
+
+  defp handle_packet(%Client.RequestTutorialLinkHtml{}, state), do: {:noreply, state}
+  defp handle_packet(%Client.RequestTutorialPassCmdToServer{}, state), do: {:noreply, state}
+  defp handle_packet(%Client.RequestTutorialQuestionMark{}, state), do: {:noreply, state}
+  defp handle_packet(%Client.RequestTutorialClientEvent{}, state), do: {:noreply, state}
 
   defp handle_packet(packet, state) do
     Logger.debug("[PlayerSession] Unhandled packet: #{inspect(packet.__struct__)}")
@@ -5772,6 +5956,18 @@ defmodule L2E.Session.PlayerSession do
           |> String.to_integer()
 
         check_grand_boss_entry(boss_npc_id, state)
+
+      # M112: Duel surrender via bypass command
+      cmd == "duel_surrender" ->
+        if state.active_duel_id do
+          L2E.Duel.Session.surrender(state.active_duel_id, state.char_id)
+        end
+
+        {:noreply, state}
+
+      # M113: Seven Signs NPC bypasses
+      String.starts_with?(cmd, "ssq_") ->
+        handle_ssq_bypass(cmd, state)
 
       true ->
         {:noreply, state}
@@ -6575,5 +6771,33 @@ defmodule L2E.Session.PlayerSession do
     end
 
     :ok
+  end
+
+  # ---------------------------------------------------------------------------
+  # M113: Seven Signs NPC bypass handlers
+  # ---------------------------------------------------------------------------
+
+  defp handle_ssq_bypass("ssq_register_dawn", state) do
+    L2E.SevenSigns.Manager.register_cabal(state.char_id, "dawn")
+    new_state = %{state | ssq_cabal: :dawn}
+    send(state.conn_pid, {:send_packet, %Server.CreatureSay{
+      char_id: 0, chat_type: 2, char_name: "System",
+      message: "You have joined the Dawn."
+    }})
+    {:noreply, new_state}
+  end
+
+  defp handle_ssq_bypass("ssq_register_dusk", state) do
+    L2E.SevenSigns.Manager.register_cabal(state.char_id, "dusk")
+    new_state = %{state | ssq_cabal: :dusk}
+    send(state.conn_pid, {:send_packet, %Server.CreatureSay{
+      char_id: 0, chat_type: 2, char_name: "System",
+      message: "You have joined the Dusk."
+    }})
+    {:noreply, new_state}
+  end
+
+  defp handle_ssq_bypass(_cmd, state) do
+    {:noreply, state}
   end
 end

@@ -76,6 +76,9 @@ defmodule L2E.Application do
       # M61-B: Seven Signs Quest state machine (period/cycle/seal tracking)
       L2E.SevenSigns.Supervisor,
 
+      # M115: Castle Manor System — seed/crop economy cycle
+      L2E.Manor.Supervisor,
+
       # M50: Quest script registry — ETS-backed, must start before any player session
       L2E.Quest.Registry,
 

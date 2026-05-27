@@ -115,6 +115,12 @@ defmodule L2E.Party do
     GenServer.call(party_pid, :get_info)
   end
 
+  @doc "Returns a list of all member PIDs in this party (used by duel system)."
+  @spec get_member_pids(pid()) :: [pid()]
+  def get_member_pids(party_pid) do
+    GenServer.call(party_pid, :get_member_pids)
+  end
+
   @doc """
   Distribute EXP and SP from a killed NPC among all online party members.
 
@@ -200,6 +206,11 @@ defmodule L2E.Party do
     }
 
     {:reply, info, state}
+  end
+
+  def handle_call(:get_member_pids, _from, state) do
+    pids = state.members |> Map.values() |> Enum.map(& &1.pid)
+    {:reply, pids, state}
   end
 
   # M88: EXP/SP distribution — Interlude formula with party size bonus and level-weighted split

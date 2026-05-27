@@ -85,8 +85,14 @@ defmodule L2E.Packet.Decoder do
   def decode(0x58, body), do: Client.RequestEnchantItem.decode(body)
   # M33: Destroy item
   def decode(0x59, body), do: Client.RequestDestroyItem.decode(body)
-  # M80: Dialog answer
-  def decode(0x5C, body), do: Client.RequestDlgAnswer.decode(body)
+  # M80: Dialog answer — correct opcode is 0xC5 (0x5C is RequestMoveToLocationInVehicle)
+  def decode(0xC5, body), do: Client.RequestDlgAnswer.decode(body)
+
+  # M111: Tutorial stubs — client sends these during the tutorial quest
+  def decode(0x7B, body), do: Client.RequestTutorialLinkHtml.decode(body)
+  def decode(0x7C, body), do: Client.RequestTutorialPassCmdToServer.decode(body)
+  def decode(0x7D, body), do: Client.RequestTutorialQuestionMark.decode(body)
+  def decode(0x7E, body), do: Client.RequestTutorialClientEvent.decode(body)
 
   # M35: Private store — sell
   def decode(0x73, body), do: Client.RequestPrivateStoreManageSell.decode(body)
@@ -182,6 +188,9 @@ defmodule L2E.Packet.Decoder do
   # NOTE: 0x89 (ReplyStart) and 0x8A (ReplySurrender) conflict with Fishing/Pet opcodes
   def decode(0x88, body), do: Client.RequestStartPledgeWar.decode(body)
   def decode(0x8B, body), do: Client.RequestStopPledgeWar.decode(body)
+
+  # M115: Castle Manor
+  def decode(0x8D, _body), do: {:ok, %Client.RequestManorList{}}
 
   # ── Extended two-byte opcode space (0xD0 prefix) ────────────────────────────
   # Body starts with a little-endian 16-bit sub-opcode, then the real payload.

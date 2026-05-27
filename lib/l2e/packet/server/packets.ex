@@ -3600,3 +3600,320 @@ defmodule L2E.Packet.Server.PetItemList do
     <<0xB0::8, count::little-32>> <> entries
   end
 end
+
+# ── M114: Recipe Shop (Public Crafting Stall) ────────────────────────────────
+
+defmodule L2E.Packet.Server.RecipeBookItemList do
+  @moduledoc """
+  0xD6 — Sends a player's recipe book to the client.
+
+  Binary layout (RecipeBookItemList.java):
+    0xD6(8)
+    is_common(32LE)   — 0 = Dwarven craft, 1 = Common craft (inverted from isDwarvenCraft)
+    max_mp(32LE)
+    count(32LE)
+    per recipe:
+      recipe_id(32LE)
+      seq(32LE)        — 1-based sequence index
+
+  Reference: ServerPackets.RECIPE_BOOK_ITEM_LIST(0xD6)
+  """
+  @behaviour L2E.Packet.Encodable
+
+  # recipes: [recipe_id :: pos_integer()]
+  defstruct [:is_dwarven, :max_mp, recipes: []]
+  @type t :: %__MODULE__{}
+
+  @opcode 0xD6
+
+  @impl L2E.Packet.Encodable
+  def encode(%__MODULE__{is_dwarven: is_dwarven, max_mp: max_mp, recipes: recipes}) do
+    list = recipes || []
+    count = length(list)
+    is_common = if is_dwarven, do: 0, else: 1
+
+    entries =
+      list
+      |> Enum.with_index(1)
+      |> Enum.map_join("", fn {recipe_id, seq} ->
+        <<recipe_id::little-32, seq::little-32>>
+      end)
+
+    <<@opcode::8, is_common::little-32, (max_mp || 0)::little-32, count::little-32>> <> entries
+  end
+end
+
+defmodule L2E.Packet.Server.RecipeShopManageList do
+  @moduledoc """
+  0xD8 — Sends the recipe shop manage UI to the Dwarf shop owner.
+
+  Binary layout (RecipeShopManageList.java):
+    0xD8(8)
+    seller_id(32LE)
+    adena(32LE)
+    is_common(32LE)   — 0 = dwarven, 1 = common
+
+    recipe_book_count(32LE)
+    per recipe in book:
+      recipe_id(32LE)
+      seq(32LE)
+
+    manufacture_count(32LE)
+    per current shop item:
+      recipe_id(32LE)
+      0(32LE)
+      cost(32LE)
+
+  Reference: ServerPackets.RECIPE_SHOP_MANAGE_LIST(0xD8)
+  """
+  @behaviour L2E.Packet.Encodable
+
+  # book_recipes: [recipe_id]
+  # shop_items: [{recipe_id, cost}]
+  defstruct [:seller_id, :adena, :is_dwarven, book_recipes: [], shop_items: []]
+  @type t :: %__MODULE__{}
+
+  @opcode 0xD8
+
+  @impl L2E.Packet.Encodable
+  def encode(%__MODULE__{
+        seller_id: seller_id,
+        adena: adena,
+        is_dwarven: is_dwarven,
+        book_recipes: book_recipes,
+        shop_items: shop_items
+      }) do
+    book = book_recipes || []
+    shop = shop_items || []
+    is_common = if is_dwarven, do: 0, else: 1
+
+    book_bin =
+      book
+      |> Enum.with_index(1)
+      |> Enum.map_join("", fn {recipe_id, seq} ->
+        <<recipe_id::little-32, seq::little-32>>
+      end)
+
+    shop_bin =
+      Enum.map_join(shop, "", fn {recipe_id, cost} ->
+        <<recipe_id::little-32, 0::little-32, cost::little-32>>
+      end)
+
+    <<@opcode::8, (seller_id || 0)::little-32, (adena || 0)::little-32,
+      is_common::little-32, length(book)::little-32>> <>
+      book_bin <>
+      <<length(shop)::little-32>> <>
+      shop_bin
+  end
+end
+
+defmodule L2E.Packet.Server.RecipeShopSellList do
+  @moduledoc """
+  0xD9 — Sends a shop owner's crafting stall list to a buyer.
+
+  Binary layout (RecipeShopSellList.java):
+    0xD9(8)
+    manufacturer_id(32LE)
+    manufacturer_current_mp(32LE)
+    manufacturer_max_mp(32LE)
+    buyer_adena(32LE)
+    count(32LE)
+    per item:
+      recipe_id(32LE)
+      0(32LE)
+      cost(32LE)
+
+  Reference: ServerPackets.RECIPE_SHOP_SELL_LIST(0xD9)
+  """
+  @behaviour L2E.Packet.Encodable
+
+  # items: [{recipe_id, cost}]
+  defstruct [:manufacturer_id, :manufacturer_mp, :manufacturer_max_mp, :buyer_adena, items: []]
+  @type t :: %__MODULE__{}
+
+  @opcode 0xD9
+
+  @impl L2E.Packet.Encodable
+  def encode(%__MODULE__{
+        manufacturer_id: mfr_id,
+        manufacturer_mp: mfr_mp,
+        manufacturer_max_mp: mfr_max_mp,
+        buyer_adena: buyer_adena,
+        items: items
+      }) do
+    list = items || []
+
+    items_bin =
+      Enum.map_join(list, "", fn {recipe_id, cost} ->
+        <<recipe_id::little-32, 0::little-32, cost::little-32>>
+      end)
+
+    <<@opcode::8, (mfr_id || 0)::little-32, (mfr_mp || 0)::little-32,
+      (mfr_max_mp || 0)::little-32, (buyer_adena || 0)::little-32,
+      length(list)::little-32>> <> items_bin
+  end
+end
+
+defmodule L2E.Packet.Server.RecipeShopItemInfo do
+  @moduledoc """
+  0xDA — Sends recipe info from a stall to the buyer who queried it.
+
+  Binary layout (RecipeShopItemInfo.java):
+    0xDA(8)
+    manufacturer_id(32LE)
+    recipe_id(32LE)
+    current_mp(32LE)
+    max_mp(32LE)
+    0xFFFFFFFF(32LE)   — padding
+
+  Reference: ServerPackets.RECIPE_SHOP_ITEM_INFO(0xDA)
+  """
+  @behaviour L2E.Packet.Encodable
+
+  defstruct [:manufacturer_id, :recipe_id, :current_mp, :max_mp]
+  @type t :: %__MODULE__{}
+
+  @opcode 0xDA
+
+  @impl L2E.Packet.Encodable
+  def encode(%__MODULE__{
+        manufacturer_id: mfr_id,
+        recipe_id: recipe_id,
+        current_mp: current_mp,
+        max_mp: max_mp
+      }) do
+    <<@opcode::8, (mfr_id || 0)::little-32, (recipe_id || 0)::little-32,
+      (current_mp || 0)::little-32, (max_mp || 0)::little-32, 0xFFFFFFFF::little-32>>
+  end
+end
+
+defmodule L2E.Packet.Server.ExSendManorList do
+  @moduledoc """
+  0xFE 0x1B — Sends the list of castles with manor to the client.
+
+  Binary layout (ExSendManorList.java):
+    0xFE(8) 0x1B(16LE)
+    count(32LE)
+    per castle:
+      castle_id(32LE)
+      name(UTF-16LE null-terminated)
+  """
+  @behaviour L2E.Packet.Encodable
+
+  defstruct [castles: []]
+  @type t :: %__MODULE__{}
+
+  @impl L2E.Packet.Encodable
+  def encode(%__MODULE__{castles: castles}) do
+    list = castles || []
+    castle_bin = Enum.map_join(list, "", fn %{id: id, name: name} ->
+      name_bin = :unicode.characters_to_binary(name || "", :utf8, {:utf16, :little}) <> <<0, 0>>
+      <<id::little-32>> <> name_bin
+    end)
+    <<0xFE::8, 0x1B::little-16, length(list)::little-32>> <> castle_bin
+  end
+end
+
+defmodule L2E.Packet.Server.ExShowManorDefaultInfo do
+  @moduledoc """
+  0xFE 0x1E — Default manor info shown when opening the manor UI.
+
+  Binary layout (ExShowManorDefaultInfo.java):
+    0xFE(8) 0x1E(16LE)
+    hide_buttons(8)   — 1 = hide seed purchase and crop sales buttons
+    crop_count(32LE)
+    per crop:
+      crop_id(32LE)
+      level(32LE)
+      seed_price(32LE)
+      crop_price(32LE)
+      reward1_type(8) — always 1
+      reward1_item_id(32LE)
+      reward2_type(8) — always 1
+      reward2_item_id(32LE)
+  """
+  @behaviour L2E.Packet.Encodable
+
+  defstruct [hide_buttons: false, crops: []]
+  @type t :: %__MODULE__{}
+
+  @impl L2E.Packet.Encodable
+  def encode(%__MODULE__{hide_buttons: hide_buttons, crops: crops}) do
+    list = crops || []
+    hide = if hide_buttons, do: 1, else: 0
+    crop_bin = Enum.map_join(list, "", fn crop ->
+      <<(crop.crop_id || 0)::little-32,
+        (crop.level || 1)::little-32,
+        (crop.seed_price || 0)::little-32,
+        (crop.crop_price || 0)::little-32,
+        1::8, (crop.reward1_item_id || 0)::little-32,
+        1::8, (crop.reward2_item_id || 0)::little-32>>
+    end)
+    <<0xFE::8, 0x1E::little-16, hide::8, length(list)::little-32>> <> crop_bin
+  end
+end
+
+defmodule L2E.Packet.Server.SSQInfo do
+  @moduledoc """
+  0xF4 — Seven Signs status panel sent in response to RequestSSQStatus.
+
+  Binary layout:
+    0xF4(8)
+    period(32LE)        1=Competition 2=Validation
+    dawn_score(32LE)
+    dusk_score(32LE)
+    player_cabal(32LE)  0=none 1=dawn 2=dusk
+    player_score(32LE)
+    (remaining fields zero-padded for client compat)
+  """
+  @behaviour L2E.Packet.Encodable
+
+  defstruct [:period, :dawn_score, :dusk_score, :player_cabal, :player_score]
+  @type t :: %__MODULE__{}
+
+  @opcode 0xF4
+
+  @impl L2E.Packet.Encodable
+  def encode(%__MODULE__{} = p) do
+    period_int = if p.period == 2, do: 2, else: 1
+    cabal_int = case p.player_cabal do
+      :dawn -> 1
+      :dusk -> 2
+      _ -> 0
+    end
+    <<@opcode::8,
+      period_int::little-32,
+      (p.dawn_score || 0)::little-32,
+      (p.dusk_score || 0)::little-32,
+      cabal_int::little-32,
+      (p.player_score || 0)::little-32,
+      0::little-32, 0::little-32, 0::little-32, 0::little-32, 0::little-32>>
+  end
+end
+
+defmodule L2E.Packet.Server.RecipeShopMsg do
+  @moduledoc """
+  0xDB — Broadcasts a crafting stall title to nearby players.
+
+  Binary layout (RecipeShopMsg.java):
+    0xDB(8)
+    object_id(32LE)
+    message(UTF-16LE null-terminated)
+
+  Reference: ServerPackets.RECIPE_SHOP_MSG(0xDB)
+  """
+  @behaviour L2E.Packet.Encodable
+
+  defstruct [:object_id, :title]
+  @type t :: %__MODULE__{}
+
+  @opcode 0xDB
+
+  @impl L2E.Packet.Encodable
+  def encode(%__MODULE__{object_id: object_id, title: title}) do
+    title_bin =
+      :unicode.characters_to_binary(title || "", :utf8, {:utf16, :little}) <> <<0, 0>>
+
+    <<@opcode::8, (object_id || 0)::little-32>> <> title_bin
+  end
+end

@@ -1339,3 +1339,58 @@ defmodule L2E.Packet.Client.RequestBlock do
 
   def decode(_), do: {:error, :bad_packet}
 end
+
+# M111: Tutorial packet stubs ─────────────────────────────────────────────────
+
+defmodule L2E.Packet.Client.RequestTutorialLinkHtml do
+  @moduledoc "0x7B — client navigates to a tutorial HTML link."
+  @behaviour L2E.Packet.Decodable
+
+  defstruct [:html_link]
+  @type t :: %__MODULE__{}
+
+  @impl L2E.Packet.Decodable
+  def decode(body) do
+    html_link =
+      body |> :binary.bin_to_list() |> Enum.take_while(&(&1 != 0)) |> :binary.list_to_bin()
+
+    {:ok, %__MODULE__{html_link: html_link}}
+  end
+end
+
+defmodule L2E.Packet.Client.RequestTutorialPassCmdToServer do
+  @moduledoc "0x7C — client passes a tutorial command string to the server."
+  @behaviour L2E.Packet.Decodable
+
+  defstruct [:cmd]
+  @type t :: %__MODULE__{}
+
+  @impl L2E.Packet.Decodable
+  def decode(body) do
+    cmd = body |> :binary.bin_to_list() |> Enum.take_while(&(&1 != 0)) |> :binary.list_to_bin()
+    {:ok, %__MODULE__{cmd: cmd}}
+  end
+end
+
+defmodule L2E.Packet.Client.RequestTutorialQuestionMark do
+  @moduledoc "0x7D — client clicks a tutorial question mark."
+  @behaviour L2E.Packet.Decodable
+
+  defstruct []
+  @type t :: %__MODULE__{}
+
+  @impl L2E.Packet.Decodable
+  def decode(_body), do: {:ok, %__MODULE__{}}
+end
+
+defmodule L2E.Packet.Client.RequestTutorialClientEvent do
+  @moduledoc "0x7E — client fires a tutorial client-side event."
+  @behaviour L2E.Packet.Decodable
+
+  defstruct [:event_id]
+  @type t :: %__MODULE__{}
+
+  @impl L2E.Packet.Decodable
+  def decode(<<event_id::little-32, _::binary>>), do: {:ok, %__MODULE__{event_id: event_id}}
+  def decode(_body), do: {:ok, %__MODULE__{event_id: 0}}
+end
