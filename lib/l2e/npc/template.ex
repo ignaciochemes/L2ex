@@ -39,6 +39,8 @@ defmodule L2E.NPC.Template do
     # Exp / SP reward on death
     :exp_reward,
     :sp_reward,
+    # Faction AI — NPCs sharing the same faction_id will call for help
+    faction_id: nil,
     # Skill AI
     skill_chance: 0.0,
     skills: [],

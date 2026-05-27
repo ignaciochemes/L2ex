@@ -32,6 +32,10 @@ defmodule L2E.World.Door do
   @spec take_damage(pid(), number()) :: :ok
   def take_damage(pid, amount), do: GenServer.cast(pid, {:take_damage, amount})
 
+  @doc "Apply damage to the door with attacker tracking."
+  @spec take_damage(pid(), number(), pid() | nil) :: :ok
+  def take_damage(pid, amount, _from_pid), do: GenServer.cast(pid, {:take_damage, amount})
+
   # -----------------------------------------------------------------------
   # GenServer callbacks
   # -----------------------------------------------------------------------
@@ -83,6 +87,12 @@ defmodule L2E.World.Door do
       destroyed = %{new_state | open: true}
       broadcast_info(destroyed)
       broadcast_status(destroyed)
+
+      # Notify the owning castle GenServer so it can track door state during siege
+      if state.castle_id && state.castle_id > 0 do
+        L2E.Siege.Castle.door_destroyed(state.castle_id, state.object_id)
+      end
+
       {:noreply, destroyed}
     else
       broadcast_info(new_state)

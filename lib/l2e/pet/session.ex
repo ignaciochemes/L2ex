@@ -16,10 +16,14 @@ defmodule L2E.Pet.Session do
   use GenServer, restart: :temporary
   require Logger
 
+  # Follow tick: every 1 second
+  @follow_tick_ms 1_000
   # Hunger tick: every 60 seconds
   @hunger_tick_ms 60_000
   # Regen tick: every 3 seconds
   @regen_tick_ms 3_000
+  # Distance threshold before pet moves toward owner
+  @follow_distance 150
 
   def start_link(opts) do
     GenServer.start_link(__MODULE__, opts)
@@ -37,8 +41,8 @@ defmodule L2E.Pet.Session do
   @doc "Get pet info (for PetInfo packet)."
   def get_info(pet_pid), do: GenServer.call(pet_pid, :get_info)
 
-  @doc "Feed the pet. food_amount is added to food_level (capped at 100)."
-  def feed(pid, food_amount), do: GenServer.cast(pid, {:feed, food_amount})
+  @doc "Feed the pet with a food item. Restores 25 food points (capped at 100)."
+  def feed(pet_pid, item_id), do: GenServer.cast(pet_pid, {:feed, item_id})
 
   @doc "List items carried by the pet (initially empty)."
   def get_items(pid), do: GenServer.call(pid, :get_items)
@@ -54,7 +58,8 @@ defmodule L2E.Pet.Session do
 
     owner_ref = Process.monitor(owner_pid)
 
-    # Start hunger and regen timers
+    # Start follow, hunger, and regen timers
+    follow_timer = Process.send_after(self(), :follow_tick, @follow_tick_ms)
     hunger_timer = Process.send_after(self(), :hunger_tick, @hunger_tick_ms)
     regen_timer = Process.send_after(self(), :regen_tick, @regen_tick_ms)
 
@@ -81,6 +86,7 @@ defmodule L2E.Pet.Session do
       pet_items: [],
       # Behavior
       action: :follow,
+      follow_timer: follow_timer,
       hunger_timer: hunger_timer,
       regen_timer: regen_timer,
       # Combat
@@ -120,9 +126,10 @@ defmodule L2E.Pet.Session do
     {:noreply, %{state | position: follow_pos}}
   end
 
-  def handle_cast({:feed, food_amount}, state) do
-    new_food = min(100, state.food_level + food_amount)
+  def handle_cast({:feed, _item_id}, state) do
+    new_food = min(100, state.food_level + 25)
     hungry = new_food < 20
+    send(state.owner_pid, {:pet_hunger_updated, new_food})
     {:noreply, %{state | food_level: new_food, hungry: hungry}}
   end
 
@@ -208,16 +215,62 @@ defmodule L2E.Pet.Session do
     new_food = max(0, state.food_level - 5)
     hungry = new_food < 20
 
-    if hungry != state.hungry do
-      # Notify owner of hunger status change
-      send(state.owner_pid, {:pet_hungry, hungry})
+    cond do
+      new_food == 0 ->
+        send(state.owner_pid, {:pet_starved, self()})
+        {:stop, :normal, %{state | food_level: 0, hungry: true}}
+
+      new_food <= 10 ->
+        send(state.owner_pid, {:pet_hunger_low, new_food})
+        timer = Process.send_after(self(), :hunger_tick, @hunger_tick_ms)
+        {:noreply, %{state | food_level: new_food, hungry: true, hunger_timer: timer}}
+
+      true ->
+        if hungry != state.hungry do
+          send(state.owner_pid, {:pet_hungry, hungry})
+        end
+
+        timer = Process.send_after(self(), :hunger_tick, @hunger_tick_ms)
+        {:noreply, %{state | food_level: new_food, hungry: hungry, hunger_timer: timer}}
     end
+  end
 
-    # Damage if starving
-    new_hp = if new_food == 0, do: max(1.0, state.hp - 10.0), else: state.hp
+  def handle_info(:follow_tick, state) do
+    new_state =
+      try do
+        case GenServer.call(state.owner_pid, :get_position, 100) do
+          {:ok, ox, oy, oz} ->
+            {px, py, _pz} = state.position
+            dx = ox - px
+            dy = oy - py
+            dist = :math.sqrt(dx * dx + dy * dy)
 
-    timer = Process.send_after(self(), :hunger_tick, @hunger_tick_ms)
-    {:noreply, %{state | food_level: new_food, hungry: hungry, hp: new_hp, hunger_timer: timer}}
+            if dist > @follow_distance do
+              step = min(100.0, dist)
+              ratio = step / dist
+              new_x = trunc(px + dx * ratio)
+              new_y = trunc(py + dy * ratio)
+
+              Phoenix.PubSub.broadcast(
+                L2E.PubSub,
+                "world:pets",
+                {:pet_moved, self(), new_x, new_y, oz}
+              )
+
+              %{state | position: {new_x, new_y, oz}}
+            else
+              state
+            end
+
+          _ ->
+            state
+        end
+      catch
+        _, _ -> state
+      end
+
+    timer = Process.send_after(self(), :follow_tick, @follow_tick_ms)
+    {:noreply, %{new_state | follow_timer: timer}}
   end
 
   def handle_info(:regen_tick, state) do
@@ -237,6 +290,12 @@ defmodule L2E.Pet.Session do
   end
 
   def handle_info(_, state), do: {:noreply, state}
+
+  @impl GenServer
+  def terminate(_reason, state) do
+    Logger.debug("[Pet] Terminating pet #{state.pet_item_obj_id}")
+    :ok
+  end
 
   # -----------------------------------------------------------------------
   # Private helpers

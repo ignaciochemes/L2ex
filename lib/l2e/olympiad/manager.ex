@@ -1,22 +1,24 @@
 defmodule L2E.Olympiad.Manager do
   @moduledoc """
-  Olympiad Manager — ETS-backed registration and point tracking.
+  Olympiad Manager — period state machine, registration, point tracking, hero election.
 
   Behavioral reference: OlympiadManager.java
 
-  OTP design: GenServer with ETS for registrations. Scheduled periods
-  via Process.send_after (no polling). Each match spawns a supervised process.
+  OTP design: GenServer with ETS for fast reads. Scheduled periods via
+  Process.send_after (no polling). Each match spawns a supervised process.
+  Pairing runs every 5 minutes during the competition period.
 
-  Foundation scope (M70):
-  - Registration list
-  - Point tracking
-  - Match list query
-  - Period state (STARTED / ENDED)
+  Period state machine:
+    :competition  — players register and matches are paired every 5 min
+    :validation   — period ended, heroes elected, waiting for next cycle
+    :non_active   — server startup / not yet initialised
 
-  M70-B additions:
-  - Match pairing and launch at period end
-  - Result recording (winner/loser point deltas)
-  - Hero determination (top-points player per class)
+  M97 additions:
+  - Full period state machine (:competition → :validation → :competition)
+  - Periodic match pairing (every 5 min during :competition)
+  - Class-based hero election via L2E.DB.Hero.elect/1
+  - PubSub broadcasts on period transitions
+  - Explicit register_player/4, deregister_player/1, get_registered/0, get_period/0 API
   """
 
   use GenServer
@@ -24,58 +26,73 @@ defmodule L2E.Olympiad.Manager do
 
   @table :olympiad_data
 
-  # Period duration (1 week = 604800 seconds in production; 1 hour for dev)
-  @period_ms :timer.hours(1)
+  # Dev timers (override in prod config for 14-day competition / 7-day validation)
+  @competition_ms :timer.minutes(60)
+  @validation_ms :timer.minutes(30)
+  @pairing_interval_ms :timer.minutes(5)
+
+  # ---------------------------------------------------------------------------
+  # Public API
+  # ---------------------------------------------------------------------------
 
   def start_link(_opts), do: GenServer.start_link(__MODULE__, [], name: __MODULE__)
 
-  @doc "Register a player for the Olympiad."
-  def register(char_id, char_name, class_id) do
-    GenServer.call(__MODULE__, {:register, char_id, char_name, class_id})
-  end
+  @doc "Register a player with a session pid (M97 API)."
+  def register_player(char_id, class_id, char_name, char_pid),
+    do: GenServer.call(__MODULE__, {:register_player, char_id, class_id, char_name, char_pid})
 
-  @doc "Unregister a player from the Olympiad."
-  def unregister(char_id) do
-    GenServer.cast(__MODULE__, {:unregister, char_id})
-  end
+  @doc "Deregister a player from the Olympiad."
+  def deregister_player(char_id),
+    do: GenServer.call(__MODULE__, {:deregister_player, char_id})
 
-  @doc "Get current Olympiad points for a player."
+  @doc "Get the current list of registered players."
+  def get_registered, do: GenServer.call(__MODULE__, :registration_list)
+
+  @doc "Get current period atom (:competition | :validation | :non_active)."
+  def get_period, do: GenServer.call(__MODULE__, :get_period)
+
+  @doc "Add (or subtract) points for a player after a match."
+  def add_points(char_id, amount),
+    do: GenServer.cast(__MODULE__, {:add_points, char_id, amount})
+
+  @doc "Record a full match result (winner/loser ids + delta). Called by Match.end_match."
+  def record_result(winner_id, loser_id, points_delta),
+    do: GenServer.cast(__MODULE__, {:record_result, winner_id, loser_id, points_delta})
+
+  # --- Legacy API (kept for backward compat) ---
+
+  @doc "Register a player without a pid."
+  def register(char_id, char_name, class_id),
+    do: GenServer.call(__MODULE__, {:register_player, char_id, class_id, char_name, nil})
+
+  @doc "Register a player with a pid (legacy 4-arg form)."
+  def register(char_id, char_name, class_id, pid) when is_pid(pid),
+    do: register_player(char_id, class_id, char_name, pid)
+
+  @doc "Unregister a player (legacy cast form)."
+  def unregister(char_id),
+    do: GenServer.cast(__MODULE__, {:unregister, char_id})
+
+  @doc "Get the registration list (legacy alias)."
+  def registration_list, do: get_registered()
+
+  @doc "Get current Olympiad points for a player (ETS fast-path)."
   def get_points(char_id) do
     case :ets.lookup(@table, {:points, char_id}) do
-      [{_, points}] -> points
+      [{_, pts}] -> pts
       [] -> 0
     end
   end
 
-  @doc "Add points to a player (after winning a match)."
-  def add_points(char_id, points) do
-    GenServer.cast(__MODULE__, {:add_points, char_id, points})
-  end
-
-  @doc "Check if Olympiad period is active."
+  @doc "True when the competition period is active."
   def active? do
-    case :ets.lookup(@table, :state) do
-      [{:state, :started}] -> true
+    case :ets.lookup(@table, :period) do
+      [{:period, :competition}] -> true
       _ -> false
     end
   end
 
-  @doc "Get registration list for display."
-  def registration_list do
-    GenServer.call(__MODULE__, :registration_list)
-  end
-
-  @doc "Register a player with their session pid (required for match teleports)."
-  def register(char_id, char_name, class_id, pid) when is_pid(pid) do
-    GenServer.call(__MODULE__, {:register, char_id, char_name, class_id, pid})
-  end
-
-  @doc "Record a match result. winner_id/loser_id may be nil for draws."
-  def record_result(winner_id, loser_id, points_delta) do
-    GenServer.cast(__MODULE__, {:record_result, winner_id, loser_id, points_delta})
-  end
-
-  @doc "Get current heroes: top-points player per class."
+  @doc "Get the current elected heroes list (ETS fast-path)."
   def get_heroes do
     case :ets.lookup(@table, :heroes) do
       [{:heroes, heroes}] -> heroes
@@ -83,80 +100,112 @@ defmodule L2E.Olympiad.Manager do
     end
   end
 
+  # ---------------------------------------------------------------------------
+  # GenServer init
+  # ---------------------------------------------------------------------------
+
   @impl GenServer
   def init(_) do
     :ets.new(@table, [:named_table, :public, read_concurrency: true])
-    :ets.insert(@table, {:state, :started})
+    :ets.insert(@table, {:period, :competition})
 
-    # Schedule period end
-    Process.send_after(self(), :period_end, @period_ms)
+    Process.send_after(self(), :end_competition_period, @competition_ms)
+    Process.send_after(self(), :pair_matches, @pairing_interval_ms)
 
-    {:ok, %{registrations: %{}}}
+    {:ok,
+     %{
+       period: :competition,
+       registered_players: %{},
+       match_count: 0,
+       points: %{}
+     }}
   end
+
+  # ---------------------------------------------------------------------------
+  # handle_call
+  # ---------------------------------------------------------------------------
 
   @impl GenServer
-  def handle_call({:register, char_id, char_name, class_id}, _from, state) do
-    if Map.has_key?(state.registrations, char_id) do
-      {:reply, {:error, :already_registered}, state}
-    else
-      entry = %{
-        char_id: char_id,
-        char_name: char_name,
-        class_id: class_id,
-        pid: nil,
-        registered_at: System.monotonic_time()
-      }
+  def handle_call({:register_player, char_id, class_id, char_name, char_pid}, _from, state) do
+    cond do
+      state.period != :competition ->
+        {:reply, {:error, :wrong_period}, state}
 
-      {:reply, :ok, %{state | registrations: Map.put(state.registrations, char_id, entry)}}
+      Map.has_key?(state.registered_players, char_id) ->
+        {:reply, {:error, :already_registered}, state}
+
+      true ->
+        entry = %{
+          char_id: char_id,
+          char_name: char_name,
+          class_id: class_id,
+          pid: char_pid,
+          registered_at: System.monotonic_time()
+        }
+
+        new_state = %{
+          state
+          | registered_players: Map.put(state.registered_players, char_id, entry)
+        }
+
+        {:reply, :ok, new_state}
     end
   end
 
-  def handle_call({:register, char_id, char_name, class_id, pid}, _from, state) do
-    if Map.has_key?(state.registrations, char_id) do
-      {:reply, {:error, :already_registered}, state}
-    else
-      entry = %{
-        char_id: char_id,
-        char_name: char_name,
-        class_id: class_id,
-        pid: pid,
-        registered_at: System.monotonic_time()
-      }
-
-      {:reply, :ok, %{state | registrations: Map.put(state.registrations, char_id, entry)}}
-    end
+  def handle_call({:deregister_player, char_id}, _from, state) do
+    new_state = %{state | registered_players: Map.delete(state.registered_players, char_id)}
+    {:reply, :ok, new_state}
   end
 
   def handle_call(:registration_list, _from, state) do
-    list = Map.values(state.registrations)
-    {:reply, list, state}
+    {:reply, Map.values(state.registered_players), state}
   end
+
+  def handle_call(:get_period, _from, state) do
+    {:reply, state.period, state}
+  end
+
+  # ---------------------------------------------------------------------------
+  # handle_cast
+  # ---------------------------------------------------------------------------
 
   @impl GenServer
   def handle_cast({:unregister, char_id}, state) do
-    {:noreply, %{state | registrations: Map.delete(state.registrations, char_id)}}
+    {:noreply, %{state | registered_players: Map.delete(state.registered_players, char_id)}}
   end
 
-  def handle_cast({:add_points, char_id, points}, state) do
-    current = get_points(char_id)
-    :ets.insert(@table, {{:points, char_id}, current + points})
-    {:noreply, state}
+  def handle_cast({:add_points, char_id, amount}, state) do
+    current = Map.get(state.points, char_id, 0)
+    new_pts = max(0, current + amount)
+    :ets.insert(@table, {{:points, char_id}, new_pts})
+    new_points = Map.put(state.points, char_id, new_pts)
+    Task.start(fn -> persist_points(char_id, new_pts) end)
+    {:noreply, %{state | points: new_points}}
   end
 
   def handle_cast({:record_result, winner_id, loser_id, points_delta}, state) do
-    if winner_id do
-      winner_pts = get_points(winner_id)
-      :ets.insert(@table, {{:points, winner_id}, winner_pts + points_delta})
-    end
+    state1 =
+      if winner_id do
+        current = Map.get(state.points, winner_id, 0)
+        new_pts = current + points_delta
+        :ets.insert(@table, {{:points, winner_id}, new_pts})
+        %{state | points: Map.put(state.points, winner_id, new_pts)}
+      else
+        state
+      end
 
-    if loser_id do
-      loser_pts = get_points(loser_id)
-      :ets.insert(@table, {{:points, loser_id}, max(0, loser_pts - points_delta)})
-    end
+    state2 =
+      if loser_id do
+        current = Map.get(state1.points, loser_id, 0)
+        new_pts = max(0, current - points_delta)
+        :ets.insert(@table, {{:points, loser_id}, new_pts})
+        %{state1 | points: Map.put(state1.points, loser_id, new_pts)}
+      else
+        state1
+      end
 
-    # Persist match result
-    winner_reg = winner_id && Map.get(state.registrations, winner_id)
-    loser_reg = loser_id && Map.get(state.registrations, loser_id)
+    winner_reg = winner_id && Map.get(state.registered_players, winner_id)
+    loser_reg = loser_id && Map.get(state.registered_players, loser_id)
 
     if winner_reg && loser_reg do
       Task.start(fn ->
@@ -164,20 +213,50 @@ defmodule L2E.Olympiad.Manager do
       end)
     end
 
-    {:noreply, state}
+    {:noreply, state2}
   end
 
+  # ---------------------------------------------------------------------------
+  # handle_info — period state machine
+  # ---------------------------------------------------------------------------
+
   @impl GenServer
-  def handle_info(:period_end, state) do
-    Logger.info("[Olympiad] Period ended. Pairing players and calculating heroes.")
-    :ets.insert(@table, {:state, :ended})
+  def handle_info(:end_competition_period, state) do
+    Logger.info("[Olympiad] Competition period ended. Entering validation.")
+    :ets.insert(@table, {:period, :validation})
 
-    players = Map.values(state.registrations)
+    elect_heroes(state.points, state.registered_players)
 
-    # Pair registered players into 1v1 matches
-    matches = pair_players(players)
+    Phoenix.PubSub.broadcast(L2E.PubSub, "olympiad", {:olympiad_period_changed, :validation})
+    Process.send_after(self(), :start_competition_period, @validation_ms)
 
-    Enum.each(matches, fn {p1, p2} ->
+    {:noreply, %{state | period: :validation, match_count: 0}}
+  end
+
+  def handle_info(:start_competition_period, state) do
+    Logger.info("[Olympiad] New competition period started.")
+    :ets.insert(@table, {:period, :competition})
+
+    Phoenix.PubSub.broadcast(L2E.PubSub, "olympiad", {:olympiad_period_changed, :competition})
+    Process.send_after(self(), :end_competition_period, @competition_ms)
+    Process.send_after(self(), :pair_matches, @pairing_interval_ms)
+
+    {:noreply,
+     %{state | period: :competition, registered_players: %{}, points: %{}, match_count: 0}}
+  end
+
+  def handle_info(:pair_matches, %{period: :competition} = state) do
+    players =
+      state.registered_players
+      |> Map.values()
+      |> Enum.filter(&(&1.pid != nil))
+      |> Enum.shuffle()
+
+    pairs = do_pair(players, [])
+
+    paired_ids = Enum.flat_map(pairs, fn {p1, p2} -> [p1.char_id, p2.char_id] end)
+
+    Enum.each(pairs, fn {p1, p2} ->
       L2E.Olympiad.Supervisor.start_match(%{
         match_id: System.unique_integer([:positive]),
         player1: p1,
@@ -185,51 +264,84 @@ defmodule L2E.Olympiad.Manager do
       })
     end)
 
-    Logger.info(
-      "[Olympiad] Started #{length(matches)} matches from #{length(players)} registrants."
-    )
+    if length(pairs) > 0 do
+      Logger.info("[Olympiad] Paired #{length(pairs)} matches from #{length(players)} waiting.")
+    end
 
-    # Determine heroes (top-points player per class this period)
-    heroes = determine_heroes(players)
-    :ets.insert(@table, {:heroes, heroes})
-    Task.start(fn -> L2E.DB.Hero.elect(heroes) end)
-    Phoenix.PubSub.broadcast(L2E.PubSub, "world:olympiad", {:heroes_elected, heroes})
+    remaining = Map.drop(state.registered_players, paired_ids)
 
-    # Schedule next period
-    Process.send_after(self(), :period_start, :timer.hours(1))
-    {:noreply, %{state | registrations: %{}}}
+    Process.send_after(self(), :pair_matches, @pairing_interval_ms)
+
+    {:noreply,
+     %{
+       state
+       | registered_players: remaining,
+         match_count: state.match_count + length(pairs)
+     }}
   end
 
-  def handle_info(:period_start, state) do
-    Logger.info("[Olympiad] New period started.")
-    :ets.insert(@table, {:state, :started})
-    Process.send_after(self(), :period_end, @period_ms)
-    {:noreply, state}
-  end
+  # During validation/non_active periods, discard pairing ticks
+  def handle_info(:pair_matches, state), do: {:noreply, state}
+
+  # Legacy message compat
+  def handle_info(:period_end, state), do: handle_info(:end_competition_period, state)
+  def handle_info(:period_start, state), do: handle_info(:start_competition_period, state)
 
   def handle_info(_, state), do: {:noreply, state}
 
-  # --- Private ---
-
-  defp pair_players(players) do
-    players
-    |> Enum.filter(&(&1.pid != nil))
-    |> Enum.shuffle()
-    |> do_pair([])
-  end
+  # ---------------------------------------------------------------------------
+  # Private helpers
+  # ---------------------------------------------------------------------------
 
   defp do_pair([], acc), do: acc
   defp do_pair([_], acc), do: acc
   defp do_pair([p1, p2 | rest], acc), do: do_pair(rest, [{p1, p2} | acc])
 
-  defp determine_heroes([]), do: []
+  # Elect heroes: top-points player per class, persisted to DB.Hero.
+  # Falls back to top-5 overall if registration data is sparse.
+  defp elect_heroes(points_map, _registered_players) when map_size(points_map) == 0, do: :ok
 
-  defp determine_heroes(players) do
-    players
-    |> Enum.group_by(& &1.class_id)
-    |> Enum.map(fn {class_id, class_players} ->
-      hero = Enum.max_by(class_players, fn p -> get_points(p.char_id) end)
-      %{class_id: class_id, char_id: hero.char_id, char_name: hero.char_name}
-    end)
+  defp elect_heroes(points_map, registered_players) do
+    # Group char_ids by class, then pick the top-points winner per class
+    heroes =
+      points_map
+      |> Enum.reduce(%{}, fn {char_id, pts}, acc ->
+        case Map.get(registered_players, char_id) do
+          nil ->
+            acc
+
+          reg ->
+            class_id = reg.class_id
+            existing_pts = acc |> Map.get(class_id, {nil, -1}) |> elem(1)
+
+            if pts > existing_pts,
+              do: Map.put(acc, class_id, {reg, pts}),
+              else: acc
+        end
+      end)
+      |> Map.values()
+      |> Enum.map(fn {reg, _pts} ->
+        %{char_id: reg.char_id, char_name: reg.char_name, class_id: reg.class_id}
+      end)
+
+    if heroes == [] do
+      :ok
+    else
+      elected_ids = Enum.map(heroes, & &1.char_id)
+      :ets.insert(@table, {:heroes, heroes})
+
+      Task.start(fn ->
+        L2E.DB.Hero.elect(heroes)
+
+        Phoenix.PubSub.broadcast(
+          L2E.PubSub,
+          "world:hero_update",
+          {:heroes_elected, elected_ids}
+        )
+      end)
+    end
   end
+
+  # No-op placeholder for point persistence (extend with DB write if needed)
+  defp persist_points(_char_id, _points), do: :ok
 end

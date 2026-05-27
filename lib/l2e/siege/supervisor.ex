@@ -7,7 +7,12 @@ defmodule L2E.Siege.Supervisor do
   @impl Supervisor
   def init(_) do
     children = [
+      # Registry for per-castle GenServer lookup by {:castle, castle_id}
+      {Registry, keys: :unique, name: L2E.Siege.Registry},
+      # DynamicSupervisor for individual Castle GenServer processes
+      {DynamicSupervisor, name: L2E.Siege.CastleSupervisor, strategy: :one_for_one},
       L2E.Siege.GuardManager,
+      # Manager starts last — its init/1 calls init_castles/0 which requires the above
       L2E.Siege.Manager
     ]
 

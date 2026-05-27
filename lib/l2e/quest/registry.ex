@@ -52,6 +52,11 @@ defmodule L2E.Quest.Registry do
     quest_modules = [
       # Add quest script modules here as they are created, e.g.:
       # L2E.Quest.Scripts.NewAdventurer,
+      L2E.Quest.Scripts.InSearchOfKnowledge,
+      L2E.Quest.Scripts.PathOfDestiny,
+      L2E.Quest.Scripts.LeafOnTheWater,
+      L2E.Quest.Scripts.TrialOfTheSeeker,
+      L2E.Quest.Scripts.NewbieHelper
     ]
 
     Enum.each(quest_modules, &register/1)

@@ -169,6 +169,16 @@ defmodule L2E.Packet.Decoder do
   # M61-B: Seven Signs Quest
   def decode(0xC7, body), do: Client.RequestSSQStatus.decode(body)
 
+  # M89: Community Board (BBS)
+  def decode(0xAB, body), do: Client.RequestShowBoard.decode(body)
+
+  # M94: Clan Wars
+  # 0x88 = RequestStartPledgeWar (declare war)
+  # 0x8B = RequestStopPledgeWar (surrender/stop war)
+  # NOTE: 0x89 (ReplyStart) and 0x8A (ReplySurrender) conflict with Fishing/Pet opcodes
+  def decode(0x88, body), do: Client.RequestStartPledgeWar.decode(body)
+  def decode(0x8B, body), do: Client.RequestStopPledgeWar.decode(body)
+
   # ── Extended two-byte opcode space (0xD0 prefix) ────────────────────────────
   # Body starts with a little-endian 16-bit sub-opcode, then the real payload.
 

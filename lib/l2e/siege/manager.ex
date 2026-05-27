@@ -93,16 +93,56 @@ defmodule L2E.Siege.Manager do
     GenServer.cast(__MODULE__, {:schedule_siege, castle_id, siege_date})
   end
 
+  @doc "Start a Castle GenServer for each of the 9 Interlude castles. Idempotent."
+  def init_castles do
+    Enum.each(L2E.Siege.Castle.all_castles(), fn %{id: id, name: name} ->
+      DynamicSupervisor.start_child(
+        L2E.Siege.CastleSupervisor,
+        {L2E.Siege.Castle, [castle_id: id, castle_name: name]}
+      )
+    end)
+
+    :ok
+  end
+
+  @doc "List all castles with live siege_state from their GenServer processes."
+  def list_castles do
+    L2E.Siege.Castle.all_castles()
+    |> Enum.map(fn %{id: id, name: name} ->
+      owner =
+        case :ets.lookup(@table, {:castle, id}) do
+          [{_, c}] -> c.owner_clan_id
+          [] -> nil
+        end
+
+      siege_state =
+        case L2E.Siege.Castle.get_info(id) do
+          %{siege_state: s} -> s
+          _ -> :idle
+        end
+
+      {id, name, owner, siege_state}
+    end)
+  end
+
   @impl GenServer
   def init(_) do
     :ets.new(@table, [:named_table, :public, read_concurrency: true])
 
-    # Load castle data
+    # Load castle data into ETS (backward compat for SiegeInfo queries)
     Enum.each(L2E.Siege.Castle.all_castles(), fn %{id: id, name: name} ->
       castle = L2E.Siege.Castle.new(id, name)
       :ets.insert(@table, {{:castle, id}, castle})
       :ets.insert(@table, {{:attackers, id}, []})
       :ets.insert(@table, {{:defenders, id}, []})
+    end)
+
+    # Start a Castle GenServer for each castle
+    Enum.each(L2E.Siege.Castle.all_castles(), fn %{id: id, name: name} ->
+      DynamicSupervisor.start_child(
+        L2E.Siege.CastleSupervisor,
+        {L2E.Siege.Castle, [castle_id: id, castle_name: name]}
+      )
     end)
 
     Logger.info(

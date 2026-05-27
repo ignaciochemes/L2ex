@@ -15,6 +15,8 @@ defmodule L2E.DB.Item do
     field(:enchant_level, :integer, default: 0)
     field(:is_equipped, :boolean, default: false)
     field(:slot, :string)
+    field(:soul_type, :integer, default: 0)
+    field(:soul_level, :integer, default: 0)
     timestamps(type: :utc_datetime)
   end
 
@@ -22,7 +24,16 @@ defmodule L2E.DB.Item do
 
   def changeset(item, attrs) do
     item
-    |> cast(attrs, [:char_id, :item_id, :count, :enchant_level, :is_equipped, :slot])
+    |> cast(attrs, [
+      :char_id,
+      :item_id,
+      :count,
+      :enchant_level,
+      :is_equipped,
+      :slot,
+      :soul_type,
+      :soul_level
+    ])
     |> validate_required([:char_id, :item_id])
     |> validate_number(:count, greater_than: 0)
   end

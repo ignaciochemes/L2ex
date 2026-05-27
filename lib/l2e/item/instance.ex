@@ -14,7 +14,9 @@ defmodule L2E.Item.Instance do
     count: 1,
     enchant_level: 0,
     is_equipped: false,
-    slot: nil
+    slot: nil,
+    soul_type: 0,
+    soul_level: 0
   ]
 
   @type t :: %__MODULE__{}

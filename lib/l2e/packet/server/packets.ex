@@ -3210,3 +3210,53 @@ defmodule L2E.Packet.Server.ExFishingHpRegen do
     <<0xFE::8, 0x21::little-16, char_id::little-32, fish_hp::little-32, fish_max_hp::little-32>>
   end
 end
+
+# -- M89: Community Board (BBS) -----------------------------------------------
+defmodule L2E.Packet.Server.ShowBoard do
+  @moduledoc """
+  Opcode 0x7A -- sends a BBS HTML page to the client Community Board window.
+
+  Binary layout (ShowBoard.java):
+    opcode(8) + unknown1(32LE=1) + html(utf16le null-terminated string)
+
+  Reference: ServerPackets.SHOW_BOARD(0x7A)
+  """
+  @behaviour L2E.Packet.Encodable
+
+  defstruct [:html]
+  @type t :: %__MODULE__{html: String.t()}
+
+  @opcode 0x7A
+
+  @impl L2E.Packet.Encodable
+  def encode(%__MODULE__{html: html}) do
+    html_bin = :unicode.characters_to_binary(html || "", :utf8, {:utf16, :little}) <> <<0::16>>
+    <<@opcode::8, 1::little-32, html_bin::binary>>
+  end
+end
+
+# ---- M97: Olympiad Registration Acknowledgment -------------------------------
+
+defmodule L2E.Packet.Server.ExOlympiadRegistration do
+  @moduledoc """
+  0xFE/0x3C — confirms Olympiad registration status to the player.
+
+  registered: true = registered, false = unregistered.
+  player_count: total registered players in the current period.
+
+  Binary layout (ExOlympiadMatchInfo.java / L2 CT0 Interlude):
+    0xFE(8)  sub_opcode(16LE=0x003C)
+    registered(32LE)  player_count(32LE)
+  """
+  @behaviour L2E.Packet.Encodable
+
+  defstruct [:registered, :player_count]
+
+  @type t :: %__MODULE__{registered: boolean(), player_count: non_neg_integer()}
+
+  @impl L2E.Packet.Encodable
+  def encode(%__MODULE__{registered: registered, player_count: player_count}) do
+    reg_int = if registered, do: 1, else: 0
+    <<0xFE::8, 0x003C::little-16, reg_int::little-32, player_count || 0::little-32>>
+  end
+end

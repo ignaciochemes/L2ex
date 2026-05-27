@@ -68,6 +68,42 @@ defmodule L2E.Geodata do
   @spec get_height(integer(), integer(), integer()) :: integer()
   def get_height(x, y, z), do: do_get_height(x, y, z)
 
+  @doc "Returns true if there is clear line of sight between two world-space points (Bresenham ray-cast)."
+  @spec can_see?(number, number, number, number, number, number) :: boolean
+  def can_see?(x1, y1, z1, x2, y2, z2) do
+    {gx1, gy1} = world_to_geo(trunc(x1), trunc(y1))
+    {gx2, gy2} = world_to_geo(trunc(x2), trunc(y2))
+    max_z = max(z1, z2)
+    bresenham_los(gx1, gy1, gx2, gy2, max_z)
+  end
+
+  @doc "Returns a list of {x, y, z} waypoints from start to destination, or [{x2,y2,z2}] if no path found."
+  @spec find_path(number, number, number, number, number, number) :: [
+          {integer(), integer(), integer()}
+        ]
+  def find_path(x1, y1, _z1, x2, y2, z2) do
+    start_cell = world_to_geo(trunc(x1), trunc(y1))
+    goal_cell = world_to_geo(trunc(x2), trunc(y2))
+    fallback = [{trunc(x2), trunc(y2), trunc(z2)}]
+
+    if start_cell == goal_cell do
+      fallback
+    else
+      case astar(start_cell, goal_cell, 200) do
+        {:ok, path} ->
+          Enum.map(path, fn {gx, gy} ->
+            wx = gx * @coord_scale + @world_min_x
+            wy = gy * @coord_scale + @world_min_y
+            wz = do_get_height(wx, wy, trunc(z2))
+            {wx, wy, wz}
+          end)
+
+        :no_path ->
+          fallback
+      end
+    end
+  end
+
   @doc "Returns the list of loaded region {rx, ry} pairs."
   @spec loaded_regions() :: [{integer(), integer()}]
   def loaded_regions(), do: GenServer.call(__MODULE__, :loaded_regions)
@@ -353,5 +389,133 @@ defmodule L2E.Geodata do
     nswe = raw &&& 0xF
     height = decode_height(raw &&& 0xFFF0)
     parse_ml_layers(rest, n - 1, [{height, nswe} | acc])
+  end
+
+  # ── Bresenham line-of-sight ───────────────────────────────────────────────────
+
+  defp bresenham_los(x0, y0, x1, y1, max_z) do
+    dx = abs(x1 - x0)
+    dy = abs(y1 - y0)
+    sx = if x0 < x1, do: 1, else: -1
+    sy = if y0 < y1, do: 1, else: -1
+    do_bres_los(x0, y0, x1, y1, sx, sy, dx - dy, dx, dy, max_z)
+  end
+
+  defp do_bres_los(x, y, x1, y1, _sx, _sy, _err, _dx, _dy, max_z) when x == x1 and y == y1 do
+    los_cell_ok?(x, y, max_z)
+  end
+
+  defp do_bres_los(x, y, x1, y1, sx, sy, err, dx, dy, max_z) do
+    if los_cell_ok?(x, y, max_z) do
+      e2 = 2 * err
+      {nx, nerr} = if e2 > -dy, do: {x + sx, err - dy}, else: {x, err}
+      {ny, nerr2} = if e2 < dx, do: {y + sy, nerr + dx}, else: {y, nerr}
+      do_bres_los(nx, ny, x1, y1, sx, sy, nerr2, dx, dy, max_z)
+    else
+      false
+    end
+  end
+
+  # Returns true if the height at geo cell (gx, gy) does not block line-of-sight.
+  defp los_cell_ok?(gx, gy, max_z) do
+    wx = gx * @coord_scale + @world_min_x
+    wy = gy * @coord_scale + @world_min_y
+    h = do_get_height(wx, wy, trunc(max_z))
+    h <= max_z + 64
+  end
+
+  # ── A* pathfinding ────────────────────────────────────────────────────────────
+
+  defp astar(start, goal, max_iter) do
+    h = manhattan_dist(start, goal)
+    open = [{h, start}]
+    closed = MapSet.new()
+    came_from = %{}
+    g = %{start => 0}
+    do_astar(open, closed, came_from, g, goal, max_iter)
+  end
+
+  defp do_astar([], _closed, _came_from, _g, _goal, _max_iter), do: :no_path
+  defp do_astar(_open, _closed, _came_from, _g, _goal, 0), do: :no_path
+
+  defp do_astar([{_f, current} | _rest], _closed, came_from, _g, goal, _max_iter)
+       when current == goal do
+    {:ok, reconstruct_path(came_from, current, [])}
+  end
+
+  defp do_astar([{_f, current} | rest_open], closed, came_from, g, goal, max_iter) do
+    if MapSet.member?(closed, current) do
+      do_astar(rest_open, closed, came_from, g, goal, max_iter - 1)
+    else
+      new_closed = MapSet.put(closed, current)
+      current_g = Map.get(g, current, 0)
+
+      {new_open, new_g, new_came_from} =
+        Enum.reduce(
+          astar_neighbors(current),
+          {rest_open, g, came_from},
+          fn neighbor, {open_acc, g_acc, cf_acc} ->
+            if MapSet.member?(new_closed, neighbor) or not cell_passable?(current, neighbor) do
+              {open_acc, g_acc, cf_acc}
+            else
+              step_cost = if astar_diagonal?(current, neighbor), do: 14, else: 10
+              tentative_g = current_g + step_cost
+
+              if tentative_g < Map.get(g_acc, neighbor, :infinity) do
+                h = manhattan_dist(neighbor, goal)
+                f = tentative_g + h
+
+                {astar_insert_open(open_acc, {f, neighbor}),
+                 Map.put(g_acc, neighbor, tentative_g), Map.put(cf_acc, neighbor, current)}
+              else
+                {open_acc, g_acc, cf_acc}
+              end
+            end
+          end
+        )
+
+      do_astar(new_open, new_closed, new_came_from, new_g, goal, max_iter - 1)
+    end
+  end
+
+  defp reconstruct_path(came_from, current, path) do
+    case Map.get(came_from, current) do
+      nil -> [current | path]
+      prev -> reconstruct_path(came_from, prev, [current | path])
+    end
+  end
+
+  defp astar_neighbors({gx, gy}) do
+    [
+      {gx - 1, gy},
+      {gx + 1, gy},
+      {gx, gy - 1},
+      {gx, gy + 1},
+      {gx - 1, gy - 1},
+      {gx - 1, gy + 1},
+      {gx + 1, gy - 1},
+      {gx + 1, gy + 1}
+    ]
+  end
+
+  defp cell_passable?({gx1, gy1}, {gx2, gy2}) do
+    wx1 = gx1 * @coord_scale + @world_min_x
+    wy1 = gy1 * @coord_scale + @world_min_y
+    wx2 = gx2 * @coord_scale + @world_min_x
+    wy2 = gy2 * @coord_scale + @world_min_y
+    h1 = do_get_height(wx1, wy1, 0)
+    h2 = do_get_height(wx2, wy2, h1)
+    abs(h2 - h1) <= 32
+  end
+
+  defp astar_diagonal?({gx1, gy1}, {gx2, gy2}), do: gx1 != gx2 and gy1 != gy2
+
+  defp manhattan_dist({gx1, gy1}, {gx2, gy2}), do: abs(gx2 - gx1) + abs(gy2 - gy1)
+
+  defp astar_insert_open(open, {f, cell}) do
+    case Enum.find_index(open, fn {of, _} -> f <= of end) do
+      nil -> open ++ [{f, cell}]
+      i -> List.insert_at(open, i, {f, cell})
+    end
   end
 end

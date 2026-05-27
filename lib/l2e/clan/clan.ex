@@ -118,6 +118,27 @@ defmodule L2E.Clan do
 
   def get_skills(clan_pid), do: GenServer.call(clan_pid, :get_skills)
 
+  # ── Clan war public API ───────────────────────────────────────────────────────
+
+  @doc "Declare war on a target clan. Returns :ok | {:error, :already_at_war} | {:error, :clan_level_too_low}"
+  def declare_war(clan_pid, target_clan_id),
+    do: GenServer.call(clan_pid, {:declare_war, target_clan_id})
+
+  @doc "Defender accepts a war declaration made by attacker_clan_id."
+  def accept_war(clan_pid, attacker_clan_id),
+    do: GenServer.call(clan_pid, {:accept_war, attacker_clan_id})
+
+  @doc "Surrender to the given clan, ending the war."
+  def surrender(clan_pid, to_clan_id),
+    do: GenServer.call(clan_pid, {:surrender, to_clan_id})
+
+  @doc "Record a war kill. killer_is_us=true means this clan's member killed an enemy."
+  def add_war_kill(clan_pid, enemy_clan_id, killer_is_us),
+    do: GenServer.cast(clan_pid, {:add_war_kill, enemy_clan_id, killer_is_us})
+
+  @doc "Returns the wars map for this clan."
+  def get_wars(clan_pid), do: GenServer.call(clan_pid, :get_wars)
+
   # -----------------------------------------------------------------------
   # GenServer callbacks
   # -----------------------------------------------------------------------
@@ -153,6 +174,47 @@ defmodule L2E.Clan do
         _ -> %{}
       end
 
+    db_wars =
+      try do
+        attacker_wars =
+          Repo.all(
+            from(w in L2E.DB.ClanWar,
+              where: w.attacker_clan_id == ^clan_id and w.state != "ended"
+            )
+          )
+
+        defender_wars =
+          Repo.all(
+            from(w in L2E.DB.ClanWar,
+              where: w.defender_clan_id == ^clan_id and w.state != "ended"
+            )
+          )
+
+        wars_as_attacker =
+          Enum.reduce(attacker_wars, %{}, fn w, acc ->
+            Map.put(acc, w.defender_clan_id, %{
+              state: String.to_atom(w.state),
+              attacker_kills: w.attacker_kills,
+              defender_kills: w.defender_kills
+            })
+          end)
+
+        Enum.reduce(defender_wars, wars_as_attacker, fn w, acc ->
+          Map.put_new(acc, w.attacker_clan_id, %{
+            state: String.to_atom(w.state),
+            attacker_kills: w.defender_kills,
+            defender_kills: w.attacker_kills
+          })
+        end)
+      rescue
+        _ -> %{}
+      end
+
+    db_enemies =
+      db_wars
+      |> Enum.filter(fn {_, w} -> w.state == :mutual end)
+      |> Enum.map(fn {id, _} -> id end)
+
     state = %{
       clan_id: clan_id,
       clan_name: clan_name,
@@ -162,6 +224,10 @@ defmodule L2E.Clan do
       castle_id: db_castle_id,
       clan_hall_id: db_clan_hall_id,
       skills: db_skills,
+      # %{other_clan_id => %{state: :declared|:mutual, attacker_kills: int, defender_kills: int}}
+      wars: db_wars,
+      # list of clan_ids in :mutual war with us
+      enemies: db_enemies,
       # %{char_id => member()}
       members: %{},
       # %{char_id => {pid, timer_ref}}
@@ -361,7 +427,219 @@ defmodule L2E.Clan do
     {:noreply, new_state}
   end
 
+  # ── Clan war — notification casts ─────────────────────────────────────────────
+
+  # Notification from attacker's clan: they declared war against us
+  def handle_cast({:war_declared_against_us, attacker_clan_id}, state) do
+    if Map.has_key?(state.wars, attacker_clan_id) do
+      {:noreply, state}
+    else
+      war_entry = %{state: :declared, attacker_kills: 0, defender_kills: 0}
+      new_wars = Map.put(state.wars, attacker_clan_id, war_entry)
+
+      Phoenix.PubSub.broadcast(
+        L2E.PubSub,
+        "clan:#{state.clan_id}",
+        {:war_declared_against_us, attacker_clan_id, state.clan_id}
+      )
+
+      {:noreply, %{state | wars: new_wars}}
+    end
+  end
+
+  # Notification: defender accepted war → attacker promotes to :mutual
+  def handle_cast({:war_accepted, defender_clan_id}, state) do
+    case Map.get(state.wars, defender_clan_id) do
+      nil ->
+        {:noreply, state}
+
+      war ->
+        updated_war = %{war | state: :mutual}
+        new_wars = Map.put(state.wars, defender_clan_id, updated_war)
+        new_enemies = [defender_clan_id | state.enemies] |> Enum.uniq()
+
+        Phoenix.PubSub.broadcast(
+          L2E.PubSub,
+          "clan:#{state.clan_id}",
+          {:war_mutual, state.clan_id, defender_clan_id}
+        )
+
+        {:noreply, %{state | wars: new_wars, enemies: new_enemies}}
+    end
+  end
+
+  # Other clan surrendered to us
+  def handle_cast({:war_surrendered, other_clan_id}, state) do
+    new_wars = Map.delete(state.wars, other_clan_id)
+    new_enemies = Enum.reject(state.enemies, &(&1 == other_clan_id))
+
+    Phoenix.PubSub.broadcast(
+      L2E.PubSub,
+      "clan:#{state.clan_id}",
+      {:war_surrender, other_clan_id, state.clan_id}
+    )
+
+    {:noreply, %{state | wars: new_wars, enemies: new_enemies}}
+  end
+
+  # Record a war kill: killer_is_us=true → we killed them, false → they killed us
+  def handle_cast({:add_war_kill, enemy_clan_id, killer_is_us}, state) do
+    case Map.get(state.wars, enemy_clan_id) do
+      nil ->
+        {:noreply, state}
+
+      war ->
+        updated_war =
+          if killer_is_us,
+            do: %{war | attacker_kills: war.attacker_kills + 1},
+            else: %{war | defender_kills: war.defender_kills + 1}
+
+        new_wars = Map.put(state.wars, enemy_clan_id, updated_war)
+        new_state = %{state | wars: new_wars}
+
+        Task.start(fn ->
+          Repo.update_all(
+            from(w in L2E.DB.ClanWar,
+              where:
+                w.attacker_clan_id == ^state.clan_id and
+                  w.defender_clan_id == ^enemy_clan_id
+            ),
+            set: [
+              attacker_kills: updated_war.attacker_kills,
+              defender_kills: updated_war.defender_kills
+            ]
+          )
+        end)
+
+        Phoenix.PubSub.broadcast(
+          L2E.PubSub,
+          "clan:#{state.clan_id}",
+          {:war_kill_update, enemy_clan_id, updated_war}
+        )
+
+        {:noreply, new_state}
+    end
+  end
+
   def handle_cast(_msg, state), do: {:noreply, state}
+
+  # ── Clan war — call handlers ───────────────────────────────────────────────────
+
+  @impl true
+  def handle_call({:declare_war, target_clan_id}, _from, state) do
+    cond do
+      state.level < 3 ->
+        {:reply, {:error, :clan_level_too_low}, state}
+
+      Map.has_key?(state.wars, target_clan_id) ->
+        {:reply, {:error, :already_at_war}, state}
+
+      true ->
+        war_entry = %{state: :declared, attacker_kills: 0, defender_kills: 0}
+        new_wars = Map.put(state.wars, target_clan_id, war_entry)
+        new_state = %{state | wars: new_wars}
+
+        Task.start(fn ->
+          %L2E.DB.ClanWar{}
+          |> L2E.DB.ClanWar.changeset(%{
+            attacker_clan_id: state.clan_id,
+            defender_clan_id: target_clan_id,
+            state: "declared"
+          })
+          |> Repo.insert(on_conflict: :nothing)
+        end)
+
+        case find_by_id(target_clan_id) do
+          nil -> :ok
+          target_pid -> GenServer.cast(target_pid, {:war_declared_against_us, state.clan_id})
+        end
+
+        Phoenix.PubSub.broadcast(
+          L2E.PubSub,
+          "clan:#{state.clan_id}",
+          {:war_declared, state.clan_id, target_clan_id}
+        )
+
+        {:reply, :ok, new_state}
+    end
+  end
+
+  def handle_call({:accept_war, attacker_clan_id}, _from, state) do
+    case Map.get(state.wars, attacker_clan_id) do
+      %{state: :declared} = war ->
+        updated_war = %{war | state: :mutual}
+        new_wars = Map.put(state.wars, attacker_clan_id, updated_war)
+        new_enemies = [attacker_clan_id | state.enemies] |> Enum.uniq()
+        new_state = %{state | wars: new_wars, enemies: new_enemies}
+
+        Task.start(fn ->
+          Repo.update_all(
+            from(w in L2E.DB.ClanWar,
+              where:
+                w.attacker_clan_id == ^attacker_clan_id and
+                  w.defender_clan_id == ^state.clan_id
+            ),
+            set: [state: "mutual"]
+          )
+        end)
+
+        case find_by_id(attacker_clan_id) do
+          nil -> :ok
+          attacker_pid -> GenServer.cast(attacker_pid, {:war_accepted, state.clan_id})
+        end
+
+        Phoenix.PubSub.broadcast(
+          L2E.PubSub,
+          "clan:#{state.clan_id}",
+          {:war_mutual, state.clan_id, attacker_clan_id}
+        )
+
+        {:reply, :ok, new_state}
+
+      _ ->
+        {:reply, {:error, :no_pending_war}, state}
+    end
+  end
+
+  def handle_call({:surrender, to_clan_id}, _from, state) do
+    case Map.get(state.wars, to_clan_id) do
+      nil ->
+        {:reply, {:error, :not_at_war}, state}
+
+      _ ->
+        new_wars = Map.delete(state.wars, to_clan_id)
+        new_enemies = Enum.reject(state.enemies, &(&1 == to_clan_id))
+        new_state = %{state | wars: new_wars, enemies: new_enemies}
+
+        Task.start(fn ->
+          Repo.update_all(
+            from(w in L2E.DB.ClanWar,
+              where:
+                (w.attacker_clan_id == ^state.clan_id and w.defender_clan_id == ^to_clan_id) or
+                  (w.attacker_clan_id == ^to_clan_id and w.defender_clan_id == ^state.clan_id)
+            ),
+            set: [state: "ended"]
+          )
+        end)
+
+        case find_by_id(to_clan_id) do
+          nil -> :ok
+          other_pid -> GenServer.cast(other_pid, {:war_surrendered, state.clan_id})
+        end
+
+        Phoenix.PubSub.broadcast(
+          L2E.PubSub,
+          "clan:#{state.clan_id}",
+          {:war_surrender, state.clan_id, to_clan_id}
+        )
+
+        {:reply, :ok, new_state}
+    end
+  end
+
+  def handle_call(:get_wars, _from, state) do
+    {:reply, state.wars, state}
+  end
 
   # ── Clan info / skills queries ─────────────────────────────────────────────────
 
@@ -391,8 +669,6 @@ defmodule L2E.Clan do
   def handle_call(_msg, _from, state) do
     {:reply, {:error, :unknown_call}, state}
   end
-
-  # ── Invite timeout ────────────────────────────────────────────────────────────
 
   @impl true
   def handle_info({:invite_timeout, target_id}, state) do

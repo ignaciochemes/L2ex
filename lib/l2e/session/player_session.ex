@@ -314,11 +314,12 @@ defmodule L2E.Session.PlayerSession do
       cancel_timer(state.attack_timer)
       cancel_timer(state.regen_timer)
 
-      # Notify killer about PvP/PK outcome
+      # Notify killer about PvP/PK outcome (include victim's clan_id for war kill tracking)
       if is_pid(from_pid) and player_pid?(from_pid) do
         GenServer.cast(
           from_pid,
-          {:player_killed, self(), state.pvp_flag, state.karma, state.level}
+          {:player_killed, self(), state.pvp_flag, state.karma, state.level,
+           Map.get(state, :clan_id, 0)}
         )
       end
 
@@ -377,7 +378,8 @@ defmodule L2E.Session.PlayerSession do
 
   # Notification that we killed another player
   def handle_cast(
-        {:player_killed, _victim_pid, victim_pvp_flag, victim_karma, victim_level},
+        {:player_killed, _victim_pid, victim_pvp_flag, victim_karma, victim_level,
+         victim_clan_id},
         state
       ) do
     new_state =
@@ -416,6 +418,14 @@ defmodule L2E.Session.PlayerSession do
           broadcast_user_info(new_s)
           new_s
       end
+
+    # M94: War kill tracking — record kill if both players are in warring clans
+    killer_clan_id = Map.get(new_state, :clan_id, 0)
+
+    if killer_clan_id != 0 and victim_clan_id != 0 and killer_clan_id != victim_clan_id and
+         new_state.clan_pid != nil do
+      L2E.Clan.add_war_kill(new_state.clan_pid, victim_clan_id, true)
+    end
 
     {:noreply, new_state}
   end
@@ -1746,6 +1756,34 @@ defmodule L2E.Session.PlayerSession do
     {:noreply, state}
   end
 
+  # M96: Pet starved — clear pet from state and return pet item to inventory
+  def handle_info({:pet_starved, _pet_pid}, state) do
+    if state.pet_pid != nil do
+      pet_item_obj_id = state.pet_item_obj_id
+
+      if pet_item_obj_id != nil do
+        Inventory.add_item(state.char_id, pet_item_obj_id, 1)
+      end
+    end
+
+    {:noreply, %{state | pet_pid: nil, pet_item_obj_id: nil}}
+  end
+
+  # M96: Pet hunger warning
+  def handle_info({:pet_hunger_low, hunger}, state) do
+    msg = "Your pet is starving! Feed it now. (Hunger: #{hunger}%)"
+
+    pkt = %Server.CreatureSay{
+      char_id: 0,
+      chat_type: 2,
+      char_name: "System",
+      message: msg
+    }
+
+    send(state.conn_pid, {:send_packet, pkt})
+    {:noreply, state}
+  end
+
   # ---- M76: Hero election broadcast ------------------------------------------
 
   def handle_info({:heroes_elected, heroes}, state) do
@@ -1822,6 +1860,66 @@ defmodule L2E.Session.PlayerSession do
     {:noreply, %{state | fishing: false, fishing_pid: nil}}
   end
 
+  # M92: Soul crystal absorption triggered by NPC death handler
+  def handle_info({:try_soul_crystal_absorb, _npc_id, npc_level}, state) do
+    case find_equipped_soul_crystal(state) do
+      nil ->
+        {:noreply, state}
+
+      {item_instance_id, item_id} ->
+        case L2E.Item.SoulCrystal.try_absorb(item_id, npc_level) do
+          {:absorbed, new_level} ->
+            new_item_id = item_id + 1
+
+            Task.start(fn ->
+              case L2E.Repo.get(L2E.DB.Item, item_instance_id) do
+                nil ->
+                  :ok
+
+                record ->
+                  record
+                  |> Ecto.Changeset.change(item_id: new_item_id)
+                  |> L2E.Repo.update()
+              end
+            end)
+
+            pkt = %Server.CreatureSay{
+              char_id: 0,
+              chat_type: 2,
+              char_name: "System",
+              message: "Your soul crystal has been upgraded to level #{new_level}!"
+            }
+
+            send(state.conn_pid, {:send_packet, pkt})
+            {:noreply, state}
+
+          {:already_max} ->
+            pkt = %Server.CreatureSay{
+              char_id: 0,
+              chat_type: 2,
+              char_name: "System",
+              message: "Your soul crystal is at maximum level."
+            }
+
+            send(state.conn_pid, {:send_packet, pkt})
+            {:noreply, state}
+
+          {:failed} ->
+            {:noreply, state}
+        end
+    end
+  end
+
+  defp find_equipped_soul_crystal(state) do
+    items = Inventory.get_items(state.char_id)
+
+    Enum.find_value(items, fn {inst, _tpl} ->
+      if L2E.Item.SoulCrystal.soul_crystal?(inst.item_id) do
+        {inst.id, inst.item_id}
+      end
+    end)
+  end
+
   def handle_info(msg, state) do
     Logger.debug("[PlayerSession] Unexpected message: #{inspect(msg)}")
     {:noreply, state}
@@ -1831,6 +1929,11 @@ defmodule L2E.Session.PlayerSession do
   def handle_call(:get_combat_stats, _from, state) do
     result = {:ok, state.char_id, player_combat_stats(state), state.position}
     {:reply, result, state}
+  end
+
+  # M88: NPC death handler queries killer's party pid for EXP distribution
+  def handle_call(:get_party_pid, _from, state) do
+    {:reply, state.party_pid, state}
   end
 
   # Party/Clan calls this to get the player's info for the party window
@@ -2945,6 +3048,19 @@ defmodule L2E.Session.PlayerSession do
 
   defp handle_packet(%L2E.Packet.Client.RequestBypassToServer{}, state), do: {:noreply, state}
 
+  # ---- M89: RequestShowBoard (0xAB) — player opens Community Board ----
+
+  defp handle_packet(
+         %L2E.Packet.Client.RequestShowBoard{},
+         %{auth_state: :in_world} = state
+       ) do
+    html = L2E.BBS.Pages.Main.render(state)
+    send(state.conn_pid, {:send_packet, %Server.ShowBoard{html: html}})
+    {:noreply, state}
+  end
+
+  defp handle_packet(%L2E.Packet.Client.RequestShowBoard{}, state), do: {:noreply, state}
+
   # ---- RequestGotoLobby (0xBA) — player returns to character selection ----
 
   defp handle_packet(%L2E.Packet.Client.RequestGotoLobby{}, %{auth_state: :in_world} = state) do
@@ -3507,6 +3623,89 @@ defmodule L2E.Session.PlayerSession do
   end
 
   defp handle_packet(%L2E.Packet.Client.RequestOustPledgeMember{}, state), do: {:noreply, state}
+
+  # ---- M94: Clan War packets ----------------------------------------------
+
+  defp handle_packet(
+         %L2E.Packet.Client.RequestStartPledgeWar{target_clan_name: name},
+         %{auth_state: :in_world} = state
+       ) do
+    if state.clan_pid != nil do
+      case Registry.lookup(L2E.Session.Registry, {:clan_name, name}) do
+        [{target_clan_pid, _}] ->
+          case L2E.Clan.get_info(target_clan_pid) do
+            %{clan_id: target_id} ->
+              L2E.Clan.declare_war(state.clan_pid, target_id)
+
+            _ ->
+              :ok
+          end
+
+        _ ->
+          :ok
+      end
+    end
+
+    {:noreply, state}
+  end
+
+  defp handle_packet(%L2E.Packet.Client.RequestStartPledgeWar{}, state),
+    do: {:noreply, state}
+
+  defp handle_packet(
+         %L2E.Packet.Client.RequestStopPledgeWar{target_clan_name: name},
+         %{auth_state: :in_world} = state
+       ) do
+    if state.clan_pid != nil do
+      case Registry.lookup(L2E.Session.Registry, {:clan_name, name}) do
+        [{target_clan_pid, _}] ->
+          case L2E.Clan.get_info(target_clan_pid) do
+            %{clan_id: target_id} ->
+              L2E.Clan.surrender(state.clan_pid, target_id)
+
+            _ ->
+              :ok
+          end
+
+        _ ->
+          :ok
+      end
+    end
+
+    {:noreply, state}
+  end
+
+  defp handle_packet(%L2E.Packet.Client.RequestStopPledgeWar{}, state),
+    do: {:noreply, state}
+
+  defp handle_packet(
+         %L2E.Packet.Client.RequestReplyStartPledgeWar{target_clan_name: name},
+         %{auth_state: :in_world} = state
+       ) do
+    if state.clan_pid != nil do
+      case Registry.lookup(L2E.Session.Registry, {:clan_name, name}) do
+        [{attacker_clan_pid, _}] ->
+          case L2E.Clan.get_info(attacker_clan_pid) do
+            %{clan_id: attacker_id} ->
+              L2E.Clan.accept_war(state.clan_pid, attacker_id)
+
+            _ ->
+              :ok
+          end
+
+        _ ->
+          :ok
+      end
+    end
+
+    {:noreply, state}
+  end
+
+  defp handle_packet(%L2E.Packet.Client.RequestReplyStartPledgeWar{}, state),
+    do: {:noreply, state}
+
+  defp handle_packet(%L2E.Packet.Client.RequestReplySurrenderPledgeWar{}, state),
+    do: {:noreply, state}
 
   # ---- M39: RequestAutoSoulShot (0xD0/0x05) — toggle auto soulshot -------
 
@@ -4451,13 +4650,12 @@ defmodule L2E.Session.PlayerSession do
          %{auth_state: :in_world} = state
        ) do
     clan_id = Map.get(state, :clan_id, 0)
-    clan_name = Map.get(state, :clan_name, "#{state.char_name}'s Clan")
 
     result =
       if is_attacker do
-        SiegeManager.register_attacker(castle_id, clan_id, clan_name)
+        L2E.Siege.Castle.register_attacker(castle_id, clan_id)
       else
-        SiegeManager.register_defender(castle_id, clan_id, clan_name)
+        L2E.Siege.Castle.register_defender(castle_id, clan_id)
       end
 
     case result do
@@ -4466,9 +4664,9 @@ defmodule L2E.Session.PlayerSession do
           "[PlayerSession] #{state.char_name} joined siege #{castle_id} as #{if is_attacker, do: "attacker", else: "defender"}"
         )
 
-      {:error, :already_registered} ->
+      {:error, reason} ->
         Logger.debug(
-          "[PlayerSession] #{state.char_name} already registered for siege #{castle_id}"
+          "[PlayerSession] #{state.char_name} could not join siege #{castle_id}: #{reason}"
         )
     end
 
@@ -4510,12 +4708,58 @@ defmodule L2E.Session.PlayerSession do
       if state.fishing_pid, do: L2E.Fishing.Session.stop_fishing(state.fishing_pid)
       {:noreply, %{state | fishing: false, fishing_pid: nil}}
     else
-      # Toggle on — start fishing
-      {:ok, fishing_pid} =
-        L2E.Fishing.Session.start_link(owner_pid: self(), char_id: state.char_id)
+      # M95: Validate rod equipped in right hand + bait in inventory
+      items = Inventory.get_items(state.char_id)
 
-      L2E.Fishing.Session.start_fishing(fishing_pid, x, y, z)
-      {:noreply, %{state | fishing: true, fishing_pid: fishing_pid}}
+      has_rod =
+        Enum.any?(items, fn {inst, _tpl} ->
+          inst.is_equipped and inst.item_id in 6519..6528
+        end)
+
+      bait =
+        Enum.find(items, fn {inst, _tpl} ->
+          not inst.is_equipped and inst.item_id in 6529..6549
+        end)
+
+      cond do
+        not has_rod ->
+          send(
+            state.conn_pid,
+            {:send_packet,
+             %Server.CreatureSay{
+               char_id: 0,
+               chat_type: 2,
+               char_name: "System",
+               message: "You need a fishing rod equipped to fish."
+             }}
+          )
+
+          {:noreply, state}
+
+        bait == nil ->
+          send(
+            state.conn_pid,
+            {:send_packet,
+             %Server.CreatureSay{
+               char_id: 0,
+               chat_type: 2,
+               char_name: "System",
+               message: "You need bait to fish."
+             }}
+          )
+
+          {:noreply, state}
+
+        true ->
+          {bait_inst, _tpl} = bait
+          Inventory.remove_item(state.char_id, bait_inst.id, 1)
+
+          {:ok, fishing_pid} =
+            L2E.Fishing.Session.start_link(owner_pid: self(), char_id: state.char_id)
+
+          L2E.Fishing.Session.start_fishing(fishing_pid, x, y, z)
+          {:noreply, %{state | fishing: true, fishing_pid: fishing_pid}}
+      end
     end
   end
 
@@ -4939,6 +5183,12 @@ defmodule L2E.Session.PlayerSession do
   # M16: Handle bypass commands from NPC dialogs
   defp handle_bypass(cmd, state) do
     cond do
+      # M89: Community Board (BBS) — checked first, before NPC handling
+      String.starts_with?(cmd, "_bbs") ->
+        html = L2E.BBS.Router.handle_bypass(cmd, state)
+        send(state.conn_pid, {:send_packet, %Server.ShowBoard{html: html}})
+        {:noreply, state}
+
       String.starts_with?(cmd, "npc_") ->
         # e.g. "npc_12345_Trade" or "npc_12345_teleport_x_y_z_fee"
         case String.split(cmd, "_", parts: 3) do
@@ -5795,5 +6045,15 @@ defmodule L2E.Session.PlayerSession do
     )
 
     %{state | zone_type: new_zone, in_water: new_zone == :water}
+  end
+
+  # M96: Save pet on player logout/crash
+  @impl GenServer
+  def terminate(_reason, state) do
+    if state.pet_pid != nil do
+      GenServer.stop(state.pet_pid, :normal)
+    end
+
+    :ok
   end
 end

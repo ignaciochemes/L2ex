@@ -29,7 +29,9 @@ defmodule L2E.NPC.Instance do
   alias L2E.Combat.Resolver
   alias L2E.Packet.Server
   alias L2E.World.Region
+  alias L2E.World.RegionCoords
   alias L2E.Item.DropResolver
+  alias L2E.Party
 
   @registry L2E.Session.Registry
 
@@ -58,7 +60,8 @@ defmodule L2E.NPC.Instance do
           skill_chance: float(),
           skills: list(),
           wander_timer: reference() | nil,
-          wander_radius: non_neg_integer()
+          wander_radius: non_neg_integer(),
+          npc_can_see: boolean()
         }
 
   # -----------------------------------------------------------------------
@@ -127,6 +130,16 @@ defmodule L2E.NPC.Instance do
 
     leash_timer = Process.send_after(self(), :leash_check, @leash_check_ms)
 
+    {gx, gy} = RegionCoords.to_grid(elem(position, 0), elem(position, 1))
+    region_id = "#{gx}:#{gy}"
+
+    faction_id = Map.get(template, :faction_id)
+
+    # M88: Subscribe to faction topic so nearby faction members can coordinate
+    if faction_id not in [nil, ""] do
+      Phoenix.PubSub.subscribe(L2E.PubSub, "region:#{region_id}:faction:#{faction_id}")
+    end
+
     state = %{
       object_id: object_id,
       template: template,
@@ -151,7 +164,12 @@ defmodule L2E.NPC.Instance do
       spoiled_by: nil,
       # M80: Fear CC state
       feared: false,
-      fear_timer: nil
+      fear_timer: nil,
+      # M88: Faction aggro — region key string for PubSub topic construction
+      region_id: region_id,
+      faction_id: faction_id,
+      # M90: LoS gate for ranged NPC attacks; set false only in tests
+      npc_can_see: true
     }
 
     state =
@@ -231,6 +249,17 @@ defmodule L2E.NPC.Instance do
     new_hate = Map.update(state.hate_map, from_pid, amount, &(&1 + amount))
     new_target = select_top_hated(new_hate, state)
     new_hp = max(0.0, state.hp - amount)
+
+    # M88: Faction aggro — broadcast to nearby faction members in the same region
+    if state.faction_id not in [nil, ""] do
+      {nx, ny, nz} = state.position
+
+      Phoenix.PubSub.broadcast(
+        L2E.PubSub,
+        "region:#{state.region_id}:faction:#{state.faction_id}",
+        {:faction_aggro, from_pid, nx, ny, nz}
+      )
+    end
 
     Logger.debug(
       "[NPC.Instance] #{state.template.name} took #{amount} dmg, hp=#{new_hp}/#{state.template.max_hp}"
@@ -458,17 +487,23 @@ defmodule L2E.NPC.Instance do
            wander_timer: wander_timer
        }}
     else
-      # Step toward spawn (simplified: teleport at walk speed steps)
-      step =
-        min(state.template.walk_speed * @return_tick_ms / 1000, distance({x, y, z}, {sx, sy, sz}))
+      # M90: Use pathfinding to navigate around obstacles toward spawn
+      {tx, ty, tz} =
+        case L2E.Geodata.find_path(x, y, z, sx, sy, sz) do
+          [] -> {sx, sy, sz}
+          [{wx, wy, wz} | _] -> {wx, wy, wz}
+        end
 
-      dist = distance({x, y, z}, {sx, sy, sz})
-      ratio = step / dist
+      step =
+        min(state.template.walk_speed * @return_tick_ms / 1000, distance({x, y, z}, {tx, ty, tz}))
+
+      dist = distance({x, y, z}, {tx, ty, tz})
+      ratio = if dist > 0, do: step / dist, else: 1.0
 
       new_pos = {
-        round(x + (sx - x) * ratio),
-        round(y + (sy - y) * ratio),
-        round(z + (sz - z) * ratio)
+        round(x + (tx - x) * ratio),
+        round(y + (ty - y) * ratio),
+        round(z + (tz - z) * ratio)
       }
 
       _timer = Process.send_after(self(), :return_tick, @return_tick_ms)
@@ -565,6 +600,23 @@ defmodule L2E.NPC.Instance do
   # M80: Dispel buffs — NPCs have no buff system, no-op
   def handle_info({:dispel_buffs, _count}, state), do: {:noreply, state}
 
+  # M88: Faction aggro — a nearby faction member was attacked; join combat if idle and close enough
+  def handle_info({:faction_aggro, _attacker_pid, _x, _y, _z}, %{ai_state: :dead} = state),
+    do: {:noreply, state}
+
+  def handle_info({:faction_aggro, attacker_pid, x, y, z}, %{ai_state: :idle} = state) do
+    if distance(state.position, {x, y, z}) <= 1000 and is_pid(attacker_pid) and
+         Process.alive?(attacker_pid) do
+      new_hate = Map.update(state.hate_map, attacker_pid, 200, &(&1 + 200))
+      new_state = enter_combat(%{state | hate_map: new_hate}, attacker_pid)
+      {:noreply, new_state}
+    else
+      {:noreply, state}
+    end
+  end
+
+  def handle_info({:faction_aggro, _attacker_pid, _x, _y, _z}, state), do: {:noreply, state}
+
   def handle_info(msg, state) do
     Logger.debug("[NPC.Instance] Unexpected: #{inspect(msg)}")
     {:noreply, state}
@@ -614,35 +666,53 @@ defmodule L2E.NPC.Instance do
     # Get defender stats and deal damage
     case GenServer.call(state.target_pid, :get_combat_stats, 2000) do
       {:ok, target_id, target_stats, target_pos} ->
-        {damage, result} = Resolver.resolve_hit(my_stats, target_stats)
+        # M90: ranged NPCs (attack_range > 100) respect line-of-sight
+        is_ranged = state.template.attack_range > 100
 
-        # Broadcast attack to region
-        attack_packet = %Server.Attack{
-          attacker_id: state.object_id,
-          attacker_x: elem(state.position, 0),
-          attacker_y: elem(state.position, 1),
-          attacker_z: elem(state.position, 2),
-          target_id: target_id,
-          damage: damage,
-          miss: result == :miss,
-          crit: result == :crit,
-          target_x: elem(target_pos, 0),
-          target_y: elem(target_pos, 1),
-          target_z: elem(target_pos, 2)
-        }
+        if is_ranged and state.npc_can_see and
+             not L2E.Geodata.can_see?(
+               elem(state.position, 0),
+               elem(state.position, 1),
+               elem(state.position, 2),
+               elem(target_pos, 0),
+               elem(target_pos, 1),
+               elem(target_pos, 2)
+             ) do
+          # Target behind wall — skip this attack, reschedule
+          atk_ms = round(1000 / (state.template.atk_speed / 500.0))
+          timer = Process.send_after(self(), :auto_attack_tick, atk_ms)
+          {:noreply, %{state | attack_timer: timer}}
+        else
+          {damage, result} = Resolver.resolve_hit(my_stats, target_stats)
 
-        broadcast_to_region(state, attack_packet)
+          # Broadcast attack to region
+          attack_packet = %Server.Attack{
+            attacker_id: state.object_id,
+            attacker_x: elem(state.position, 0),
+            attacker_y: elem(state.position, 1),
+            attacker_z: elem(state.position, 2),
+            target_id: target_id,
+            damage: damage,
+            miss: result == :miss,
+            crit: result == :crit,
+            target_x: elem(target_pos, 0),
+            target_y: elem(target_pos, 1),
+            target_z: elem(target_pos, 2)
+          }
 
-        # Tell target to take damage
-        GenServer.cast(state.target_pid, {:take_damage, damage, self()})
+          broadcast_to_region(state, attack_packet)
 
-        # Maybe cast a skill
-        state = maybe_cast_skill(state, target_id)
+          # Tell target to take damage
+          GenServer.cast(state.target_pid, {:take_damage, damage, self()})
 
-        # Schedule next attack
-        atk_ms = round(1000 / (state.template.atk_speed / 500.0))
-        timer = Process.send_after(self(), :auto_attack_tick, atk_ms)
-        {:noreply, %{state | attack_timer: timer}}
+          # Maybe cast a skill
+          state = maybe_cast_skill(state, target_id)
+
+          # Schedule next attack
+          atk_ms = round(1000 / (state.template.atk_speed / 500.0))
+          timer = Process.send_after(self(), :auto_attack_tick, atk_ms)
+          {:noreply, %{state | attack_timer: timer}}
+        end
 
       _error ->
         {:noreply, drop_target(state)}
@@ -677,13 +747,46 @@ defmodule L2E.NPC.Instance do
       end)
     end
 
-    # Send EXP/SP reward to the killer
+    # Send EXP/SP reward to the killer — party-aware (M88)
     if is_pid(state.target_pid) and Process.alive?(state.target_pid) and
          (state.template.exp_reward > 0 or state.template.sp_reward > 0) do
-      GenServer.cast(
+      killer_party_pid =
+        try do
+          GenServer.call(state.target_pid, :get_party_pid, 1_000)
+        catch
+          _, _ -> nil
+        end
+
+      case killer_party_pid do
+        nil ->
+          GenServer.cast(
+            state.target_pid,
+            {:receive_xp_sp, state.template.exp_reward, state.template.sp_reward}
+          )
+
+        party_pid ->
+          Party.distribute_exp(
+            party_pid,
+            state.template.exp_reward,
+            state.template.sp_reward,
+            state.template.level
+          )
+      end
+    end
+
+    # TODO M91: Quest.Engine.on_kill(state.target_pid, state.template.npc_id, 1)
+
+    # M92: Soul crystal absorption — send event to killer session
+    if is_pid(state.target_pid) and Process.alive?(state.target_pid) do
+      send(
         state.target_pid,
-        {:receive_xp_sp, state.template.exp_reward, state.template.sp_reward}
+        {:try_soul_crystal_absorb, state.template.npc_id, state.template.level}
       )
+    end
+
+    # M98: Grand Boss death — notify manager to set dead state and unlock instance
+    if state.template.npc_id in L2E.GrandBoss.Manager.grand_boss_ids() do
+      L2E.GrandBoss.Manager.boss_died(state.template.npc_id)
     end
 
     # Notify SpawnTable for respawn scheduling

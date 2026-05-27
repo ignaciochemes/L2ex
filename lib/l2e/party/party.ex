@@ -115,6 +115,17 @@ defmodule L2E.Party do
     GenServer.call(party_pid, :get_info)
   end
 
+  @doc """
+  Distribute EXP and SP from a killed NPC among all online party members.
+
+  Uses the Interlude bonus multiplier (1.0 + 0.1 per extra member) and splits
+  the total pool by each member's level weight.
+  """
+  @spec distribute_exp(pid(), non_neg_integer(), non_neg_integer(), non_neg_integer()) :: :ok
+  def distribute_exp(party_pid, base_exp, base_sp, npc_level) do
+    GenServer.call(party_pid, {:distribute_exp, base_exp, base_sp, npc_level})
+  end
+
   # -----------------------------------------------------------------------
   # GenServer callbacks
   # -----------------------------------------------------------------------
@@ -189,6 +200,34 @@ defmodule L2E.Party do
     }
 
     {:reply, info, state}
+  end
+
+  # M88: EXP/SP distribution — Interlude formula with party size bonus and level-weighted split
+  def handle_call({:distribute_exp, base_exp, base_sp, _npc_level}, _from, state) do
+    members = Map.values(state.members)
+    size = length(members)
+
+    if size == 0 do
+      {:reply, :ok, state}
+    else
+      bonus = 1.0 + (size - 1) * 0.1
+      total_exp = round(base_exp * bonus)
+      total_sp = round(base_sp * bonus)
+
+      level_sum = Enum.reduce(members, 0, fn m, acc -> acc + max(m.level, 1) end)
+
+      Enum.each(members, fn member ->
+        share = member.level / level_sum
+        member_exp = round(total_exp * share)
+        member_sp = round(total_sp * share)
+
+        if member_exp > 0 or member_sp > 0 do
+          GenServer.cast(member.pid, {:receive_xp_sp, member_exp, member_sp})
+        end
+      end)
+
+      {:reply, :ok, state}
+    end
   end
 
   # ── Invite ───────────────────────────────────────────────────────────────────

@@ -477,7 +477,9 @@ defmodule L2E.Inventory do
       count: i.count,
       enchant_level: i.enchant_level,
       is_equipped: i.is_equipped,
-      slot: parse_slot(i.slot)
+      slot: parse_slot(i.slot),
+      soul_type: i.soul_type || 0,
+      soul_level: i.soul_level || 0
     }
   end
 
