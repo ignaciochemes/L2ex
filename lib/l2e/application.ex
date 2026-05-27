@@ -34,6 +34,9 @@ defmodule L2E.Application do
       # M68: Sub-class data
       L2E.Data.SubclassData,
 
+      # Clan skill unlock table (ETS-backed)
+      L2E.Data.ClanSkillData,
+
       # M72-B: Pet template data
       L2E.Data.PetDataTable,
 
