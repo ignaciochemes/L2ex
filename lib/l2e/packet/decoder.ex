@@ -105,6 +105,10 @@ defmodule L2E.Packet.Decoder do
   def decode(0x6B, body), do: Client.RequestAcquireSkillInfo.decode(body)
   def decode(0x6C, body), do: Client.RequestAcquireSkill.decode(body)
 
+  # M122: Party matching
+  def decode(0x6F, body), do: Client.RequestPartyMatchConfig.decode(body)
+  def decode(0x70, body), do: Client.RequestPartyMatchList.decode(body)
+
   # M43: Private store — buy
   def decode(0x90, body), do: Client.RequestPrivateStoreManageBuy.decode(body)
   def decode(0x91, body), do: Client.SetPrivateStoreListBuy.decode(body)

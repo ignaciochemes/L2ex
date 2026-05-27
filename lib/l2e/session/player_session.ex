@@ -3115,12 +3115,17 @@ defmodule L2E.Session.PlayerSession do
 
       if state.region_pid, do: GenServer.cast(state.region_pid, {:broadcast_packet, cast_pkt})
       send(state.conn_pid, {:send_packet, cast_pkt})
-      send(state.conn_pid, {:send_packet, %Server.SetupGauge{
-        type: 1,
-        object_id: state.char_id,
-        time: template.cast_time_ms,
-        max_time: template.cast_time_ms
-      }})
+
+      send(
+        state.conn_pid,
+        {:send_packet,
+         %Server.SetupGauge{
+           type: 1,
+           object_id: state.char_id,
+           time: template.cast_time_ms,
+           max_time: template.cast_time_ms
+         }}
+      )
 
       ref =
         Process.send_after(
@@ -3354,9 +3359,65 @@ defmodule L2E.Session.PlayerSession do
          },
          state
        ) do
-    # Stub: crafting logic TBD in manufacturing milestone
-    Logger.debug("[PlayerSession] Recipe shop craft requested: recipe_id=#{recipe_id}")
-    {:noreply, state}
+    case L2E.Data.RecipeTable.get(recipe_id) do
+      nil ->
+        {:noreply, state}
+
+      recipe ->
+        items = Inventory.get_items(state.char_id)
+
+        case L2E.Game.CraftEngine.check_ingredients(recipe.ingredients, items) do
+          {:error, :missing_ingredients} ->
+            pkt = %Server.RecipeItemMakeInfo{
+              recipe_id: recipe_id,
+              current_mp: round(state.mp),
+              max_mp: round(state.max_mp),
+              success: false,
+              is_common: Map.get(recipe, :is_common, false)
+            }
+
+            send(state.conn_pid, {:send_packet, pkt})
+
+          :ok ->
+            rate =
+              L2E.Game.CraftEngine.success_rate(state.level, recipe.required_skill_level)
+
+            case L2E.Game.CraftEngine.attempt(rate) do
+              :success ->
+                Enum.each(recipe.ingredients, fn %{item_id: iid, count: qty} ->
+                  case Enum.find(items, fn {inst, _} -> inst.item_id == iid end) do
+                    {inst, _} -> Inventory.remove_item(state.char_id, inst.id, qty)
+                    _ -> :ok
+                  end
+                end)
+
+                Inventory.add_item(state.char_id, recipe.item_id, recipe.count)
+
+                pkt = %Server.RecipeItemMakeInfo{
+                  recipe_id: recipe_id,
+                  current_mp: round(state.mp),
+                  max_mp: round(state.max_mp),
+                  success: true,
+                  is_common: Map.get(recipe, :is_common, false)
+                }
+
+                send(state.conn_pid, {:send_packet, pkt})
+
+              :fail ->
+                pkt = %Server.RecipeItemMakeInfo{
+                  recipe_id: recipe_id,
+                  current_mp: round(state.mp),
+                  max_mp: round(state.max_mp),
+                  success: false,
+                  is_common: Map.get(recipe, :is_common, false)
+                }
+
+                send(state.conn_pid, {:send_packet, pkt})
+            end
+        end
+
+        {:noreply, state}
+    end
   end
 
   # ---- M115: Castle Manor System ----
@@ -3373,8 +3434,14 @@ defmodule L2E.Session.PlayerSession do
     Enum.each(entries, fn e ->
       L2E.Manor.Manager.sow_seed(cid, e.seed_id, e.amount)
     end)
+
     prod = L2E.Manor.Manager.get_production_list(cid)
-    send(state.conn_pid, {:send_packet, %L2E.Packet.Server.ExShowSeedSetting{castle_id: cid, entries: prod}})
+
+    send(
+      state.conn_pid,
+      {:send_packet, %L2E.Packet.Server.ExShowSeedSetting{castle_id: cid, entries: prod}}
+    )
+
     {:noreply, state}
   end
 
@@ -3383,8 +3450,14 @@ defmodule L2E.Session.PlayerSession do
     Enum.each(entries, fn e ->
       L2E.Manor.Manager.set_crop_procure(cid, e.item_id, e.amount)
     end)
+
     proc = L2E.Manor.Manager.get_procure_list(cid)
-    send(state.conn_pid, {:send_packet, %L2E.Packet.Server.ExShowCropSetting{castle_id: cid, entries: proc}})
+
+    send(
+      state.conn_pid,
+      {:send_packet, %L2E.Packet.Server.ExShowCropSetting{castle_id: cid, entries: proc}}
+    )
+
     {:noreply, state}
   end
 
@@ -3392,11 +3465,61 @@ defmodule L2E.Session.PlayerSession do
   defp handle_packet(%L2E.Packet.Client.RequestSetPledgeCrest{data: crest_data}, state) do
     if not is_nil(state.clan_id) and state.clan_id > 0 do
       L2E.Clan.set_crest(state.clan_id, crest_data)
-      send(state.conn_pid, {:send_packet, %Server.PledgeCrest{
-        crest_id: state.clan_id,
-        data: crest_data
-      }})
+
+      send(
+        state.conn_pid,
+        {:send_packet,
+         %Server.PledgeCrest{
+           crest_id: state.clan_id,
+           data: crest_data
+         }}
+      )
     end
+
+    {:noreply, state}
+  end
+
+  # M122: Party Matching — open match window / register in waiting pool
+  defp handle_packet(%L2E.Packet.Client.RequestPartyMatchConfig{}, state) do
+    rooms =
+      L2E.Party.Room.list_rooms()
+      |> Enum.map(fn r -> %{name: r.title, class_id: 0, level: r.min_level} end)
+
+    send(
+      state.conn_pid,
+      {:send_packet, %Server.ExListPartyMatchingWaitingRoom{rooms: rooms, page: 1}}
+    )
+
+    {:noreply, state}
+  end
+
+  # M122: Party Matching — create or update a party room listing
+  defp handle_packet(%L2E.Packet.Client.RequestPartyMatchList{} = pkt, state) do
+    if pkt.room_id == 0 and state.party_pid != nil do
+      params = [
+        id: L2E.Party.Room.next_id(),
+        title: pkt.room_title || "Party",
+        party_pid: state.party_pid,
+        leader_char_id: state.char_id,
+        min_level: pkt.min_level,
+        max_level: pkt.max_level,
+        loot_type: :by_turn,
+        member_count: 1,
+        max_members: min(pkt.members_max || 9, 9)
+      ]
+
+      L2E.Party.Room.create(params)
+    end
+
+    rooms =
+      L2E.Party.Room.list_rooms()
+      |> Enum.map(fn r -> %{name: r.title, class_id: 0, level: r.min_level} end)
+
+    send(
+      state.conn_pid,
+      {:send_packet, %Server.ExListPartyMatchingWaitingRoom{rooms: rooms, page: 1}}
+    )
+
     {:noreply, state}
   end
 
@@ -4322,6 +4445,33 @@ defmodule L2E.Session.PlayerSession do
   end
 
   defp handle_packet(%L2E.Packet.Client.RequestAcquireSkillInfo{}, state), do: {:noreply, state}
+
+  # M121: Clan skill acquisition — acquire_type 2 = PLEDGE
+  # Must appear before the general RequestAcquireSkill clause.
+  defp handle_packet(
+         %L2E.Packet.Client.RequestAcquireSkill{
+           skill_id: skill_id,
+           skill_level: skill_level,
+           acquire_type: 2
+         },
+         %{auth_state: :in_world} = state
+       ) do
+    with clan_pid when not is_nil(clan_pid) <- state.clan_pid,
+         skill_def when not is_nil(skill_def) <- L2E.Data.ClanSkillData.get(skill_id),
+         true <- skill_level <= skill_def.max_level do
+      L2E.Clan.add_clan_skill(clan_pid, skill_id, skill_level)
+      acquired = L2E.Clan.get_skills(clan_pid)
+
+      skill_list =
+        Enum.map(L2E.Data.ClanSkillData.all(), fn s ->
+          %{skill_id: s.skill_id, level: Map.get(acquired, s.skill_id, 0)}
+        end)
+
+      send(state.conn_pid, {:send_packet, %Server.PledgeSkillList{skills: skill_list}})
+    end
+
+    {:noreply, state}
+  end
 
   defp handle_packet(
          %L2E.Packet.Client.RequestAcquireSkill{

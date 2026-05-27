@@ -3979,3 +3979,85 @@ defmodule L2E.Packet.Server.PledgeCrest do
     <<0x6C::8, p.crest_id::little-32, data_len::little-32, p.data::binary>>
   end
 end
+
+# ---------------------------------------------------------------------------
+# M121: PledgeSkillList (0xFE/0x39) — sends the full list of acquired clan skills
+#
+# Binary layout (PledgeSkillList.java):
+#   0xFE(8), 0x0039(16LE), count(32LE)
+#   For each skill: skill_id(32LE), skill_level(32LE)
+#
+# Opcode verified: ServerPackets.java PLEDGE_SKILL_LIST(0xFE, 0x39)
+# ---------------------------------------------------------------------------
+defmodule L2E.Packet.Server.PledgeSkillList do
+  @moduledoc "Sends the acquired clan skill list to the clan member."
+  @behaviour L2E.Packet.Encodable
+  # skills: [{skill_id, level}] list of acquired skills
+  defstruct skills: []
+  @type t :: %__MODULE__{}
+  @impl L2E.Packet.Encodable
+  def encode(%__MODULE__{} = p) do
+    count = length(p.skills)
+
+    skills_bin =
+      Enum.reduce(p.skills, <<>>, fn %{skill_id: sid, level: lvl}, acc ->
+        acc <> <<sid::little-32, lvl::little-32>>
+      end)
+
+    <<0xFE::8, 0x0039::little-16, count::little-32, skills_bin::binary>>
+  end
+end
+
+# ---------------------------------------------------------------------------
+# M121: PledgeSkillListAdd (0xFE/0x3A) — confirms a single newly acquired clan skill
+#
+# Binary layout (PledgeSkillListAdd.java):
+#   0xFE(8), 0x003A(16LE), skill_id(32LE), skill_level(32LE)
+#
+# Opcode verified: ServerPackets.java PLEDGE_SKILL_LIST_ADD(0xFE, 0x3A)
+# ---------------------------------------------------------------------------
+defmodule L2E.Packet.Server.PledgeSkillListAdd do
+  @moduledoc "Confirms a single clan skill was acquired."
+  @behaviour L2E.Packet.Encodable
+  defstruct skill_id: 0, skill_level: 1
+  @type t :: %__MODULE__{}
+  @impl L2E.Packet.Encodable
+  def encode(%__MODULE__{} = p) do
+    <<0xFE::8, 0x003A::little-16, p.skill_id::little-32, p.skill_level::little-32>>
+  end
+end
+
+# ---------------------------------------------------------------------------
+# M122: ExListPartyMatchingWaitingRoom (0xFE/0x35) — sends party matching room list
+#
+# Binary layout (ExListPartyMatchingWaitingRoom.java):
+#   0xFE(8), 0x0035(16LE)
+#   page(32LE), count(32LE)
+#   For each room entry: name(UTF-16LE null-terminated), class_id(32LE), level(32LE)
+#
+# Opcode verified: ServerPackets.java EX_LIST_PARTY_MATCHING_WAITING_ROOM(0xFE, 0x35)
+# ---------------------------------------------------------------------------
+defmodule L2E.Packet.Server.ExListPartyMatchingWaitingRoom do
+  @moduledoc "Sends the party matching room list to the client."
+  @behaviour L2E.Packet.Encodable
+  # rooms: list of maps with :name, :class_id, :level
+  defstruct rooms: [], page: 1
+  @type t :: %__MODULE__{}
+  @impl L2E.Packet.Encodable
+  def encode(%__MODULE__{} = p) do
+    count = length(p.rooms)
+
+    rooms_bin =
+      Enum.reduce(p.rooms, <<>>, fn room, acc ->
+        name_bin =
+          :unicode.characters_to_binary(room.name || "", :utf8, {:utf16, :little}) <> <<0, 0>>
+
+        acc <>
+          name_bin <>
+          <<Map.get(room, :class_id, 0)::little-32,
+            Map.get(room, :level, 1)::little-32>>
+      end)
+
+    <<0xFE::8, 0x0035::little-16, p.page::little-32, count::little-32, rooms_bin::binary>>
+  end
+end
