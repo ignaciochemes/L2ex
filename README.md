@@ -490,6 +490,33 @@ L2E:      1.0   2.0   3.9   7.8   15.4  (near-linear)
 | M117 – SetupGauge / MagicSkillCanceled | `SetupGauge` (0x6D) + `MagicSkillCanceled` (0x49) server packet structs implementing `Encodable`; `SetupGauge` dispatched from `RequestMagicSkillUse` handler using `template.cast_time_ms` |
 | M118 – Manor seed/crop full flow | `Manor.Manager` gains `sow_seed/3`, `set_crop_procure/3`, `get_production_list/1`, `get_procure_list/1` with `:modifiable` mode guard + DB upsert; `RequestSetSeed` (0xD0/0x0A) + `RequestSetCrop` (0xD0/0x0B) client packets; `ExShowSeedSetting` (0xFE/0x1F) + `ExShowCropSetting` (0xFE/0x20) standalone server packet modules; decoder entries + `PlayerSession` handlers |
 | M119 – Clan Crests | `20260601000001_create_clan_crests` migration (`clan_id` PK, `crest_data` binary, `large_crest_data` binary); `L2E.DB.ClanCrest` Ecto schema; `RequestSetPledgeCrest` (0x53, Java-verified — no `crest_id` field); `PledgeCrest` (0x6C) server packet; `L2E.Clan.set_crest/2` DB upsert + PubSub broadcast on `"world:clan_crest"`; `PlayerSession` handler |
+| M120 – Subclass (complete) | Subclass registration (max 3); SP pool per sub-class; level cap 70; `RequestExAddSubClass` / `RequestExSwitchSubClass` with `SubclassData` validation |
+| M121 – Clan Skills | `PledgeSkillList` (0xFE/0x39) + `PledgeSkillListAdd` (0xFE/0x3A) server packets; `RequestAcquireSkill{acquire_type: 2}` handler — acquires clan skill via `Clan.add_clan_skill/2`, broadcasts full skill list; `ClanSkillData` ETS table (skills 370–391 from pledgeSkillTree.xml, registered in application.ex) |
+| M122 – Party Room Networking | `ExListPartyMatchingWaitingRoom` (0xFE/0x35) server packet — UTF-16LE room names; decoder entries for 0x6F (`RequestPartyMatchConfig`) and 0x70 (`RequestPartyMatchList`); `Party.Room` GenServer (Wave 1): create/close/list/update_count/next_id |
+| M123 – Crafting Full Flow | `RequestRecipeShopMakeItem` handler: `RecipeTable.get/1` → ingredient check via `CraftEngine.check_ingredients/2` → success rate → outcome; `CraftEngine`: `success_rate/2`, `attempt/1`, `check_ingredients/2` (pure functional); sends `RecipeItemMakeInfo` (0xD7) with success/fail result |
+| M124 – NPC Walker (data layer) | `WalkingManager` supervised; XML patrol path loader; `NPC.Walker` behaviour with waypoint queue; `ProcessMoveToLocation` broadcast at each node |
+
+## Sprint 11 — Clan Skills · Party Room · Crafting Full Flow
+
+**Commit:** 3cfaecc
+
+### M121 — Clan Skills
+- `PledgeSkillList` (0xFE/0x39) and `PledgeSkillListAdd` (0xFE/0x3A) server packets
+- `RequestAcquireSkill{acquire_type: 2}` handler — acquires clan skill, broadcasts full skill list
+- `ClanSkillData` ETS table (skills 370–391 from pledgeSkillTree.xml, registered in application.ex)
+
+### M122 — Party Room Networking
+- `ExListPartyMatchingWaitingRoom` (0xFE/0x35) server packet — UTF-16LE room names
+- Decoder entries for 0x6F (`RequestPartyMatchConfig`) and 0x70 (`RequestPartyMatchList`)
+- `Party.Room` GenServer (Wave 1): create/close/list/update_count/next_id
+
+### M123 — Crafting Full Flow
+- `RequestRecipeShopMakeItem` handler: RecipeTable lookup → ingredient check → success rate → outcome
+- `CraftEngine`: `success_rate/2`, `attempt/1`, `check_ingredients/2` (pure functional)
+- Sends `RecipeItemMakeInfo` (0xD7) with success/fail result
+
+### M120 — Subclass (already complete from previous sprint)
+### M124 — NPC Walker (data layer complete, WalkingManager supervised)
 
 ### Next
 
