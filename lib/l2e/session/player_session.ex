@@ -327,6 +327,12 @@ defmodule L2E.Session.PlayerSession do
       end
 
       maybe_drop_karma_items(state)
+
+      # M110: Unsummon pet on owner death
+      if state.pet_pid != nil do
+        GenServer.cast(state.pet_pid, :unsummon)
+      end
+
       Process.send_after(self(), :respawn, @respawn_ms)
 
       # XP loss on death (Interlude rules: % of XP within current level)
@@ -361,7 +367,9 @@ defmodule L2E.Session.PlayerSession do
            attacking: false,
            attack_timer: nil,
            regen_timer: nil,
-           exp: new_exp
+           exp: new_exp,
+           pet_pid: nil,
+           pet_item_obj_id: nil
        }}
     else
       {:noreply, new_state}
@@ -675,6 +683,39 @@ defmodule L2E.Session.PlayerSession do
       )
 
     {:noreply, %{state | dots: Map.put(state.dots, skill_id, timer)}}
+  end
+
+  # M109: Admin force-kill — set HP to 0 and trigger death via take_damage path
+  def handle_cast({:admin_force_kill}, state) do
+    GenServer.cast(self(), {:take_damage, state.hp + 1, nil})
+    {:noreply, state}
+  end
+
+  # M109: Admin heal — restore HP and MP to max
+  def handle_cast({:admin_heal}, state) do
+    new_state = %{state | hp: state.max_hp, mp: state.max_mp}
+    hp_update = Server.StatusUpdate.hp_mp(state.char_id, new_state.hp, new_state.mp)
+    send(state.conn_pid, {:send_packet, hp_update})
+    {:noreply, new_state}
+  end
+
+  # M109: Admin set level — update level in state and persist to DB
+  def handle_cast({:admin_set_level, level}, state) when level in 1..85 do
+    if state.char_db_id do
+      Repo.update_all(
+        from(c in Character, where: c.id == ^state.char_db_id),
+        set: [level: level]
+      )
+    end
+
+    new_state = %{state | level: level}
+    broadcast_user_info(new_state)
+    {:noreply, new_state}
+  end
+
+  # M109: Admin set enchant on equipped weapon — no-op stub (enchant stored in inventory)
+  def handle_cast({:admin_set_enchant, _enchant_level}, state) do
+    {:noreply, state}
   end
 
   # -----------------------------------------------------------------------
@@ -1939,6 +1980,24 @@ defmodule L2E.Session.PlayerSession do
     {:noreply, state}
   end
 
+  # ---- M105: Cursed Weapon notification ------------------------------------
+
+  def handle_info({:cursed_weapon_notification, message}, state) do
+    pkt = %Server.CreatureSay{char_id: 0, chat_type: 0, char_name: "System", message: message}
+    send(state.conn_pid, {:send_packet, pkt})
+    {:noreply, state}
+  end
+
+  # ---- M110: Owner died — unsummon pet ------------------------------------
+
+  def handle_info({:owner_died}, state) do
+    if state.pet_pid != nil do
+      GenServer.cast(state.pet_pid, :unsummon)
+    end
+
+    {:noreply, %{state | pet_pid: nil, pet_item_obj_id: nil}}
+  end
+
   # ---- M102: Olympiad arena UI packets --------------------------------------
 
   def handle_info({:send_olympiad_ui_packet, pkt}, state) do
@@ -2333,6 +2392,15 @@ defmodule L2E.Session.PlayerSession do
     heroes = L2E.DB.Hero.active_heroes()
     is_hero = Enum.any?(heroes, fn h -> h.char_id == char_id end)
     send(state.conn_pid, {:send_packet, %L2E.Packet.Server.ExHeroList{heroes: heroes}})
+
+    # M105: Send cursed weapon list on world entry
+    send(
+      state.conn_pid,
+      {:send_packet,
+       %L2E.Packet.Server.ExCursedWeaponList{
+         weapons: L2E.Item.CursedWeapon.get_active_weapons()
+       }}
+    )
 
     # M101: Send clan war list if player belongs to a clan
     if state.clan_id not in [0, nil] do
@@ -4805,6 +4873,20 @@ defmodule L2E.Session.PlayerSession do
     end
   end
 
+  # ---- M110: RequestPetItemList (0x8E) — send pet inventory to client ------
+
+  defp handle_packet(%Client.RequestPetItemList{}, state) do
+    case state.pet_pid do
+      nil ->
+        {:noreply, state}
+
+      pet_pid ->
+        items = L2E.Pet.Session.get_items(pet_pid)
+        send(state.conn_pid, {:send_packet, %Server.PetItemList{items: items}})
+        {:noreply, state}
+    end
+  end
+
   # ---- M86: RequestFishing (0x89) — start or stop fishing ------------------
 
   defp handle_packet(%Client.RequestFishing{x: x, y: y, z: z}, %{auth_state: :in_world} = state) do
@@ -4869,6 +4951,152 @@ defmodule L2E.Session.PlayerSession do
   end
 
   defp handle_packet(%Client.RequestFishing{}, state), do: {:noreply, state}
+
+  # ---- M107: Skill Enchant -----------------------------------------------
+  # Note: state.skill_enchants is loaded as a stub (%{}) at world entry;
+  # full DB loading via CharacterSkill.load_enchant_levels/1 is not yet wired
+  # into EnterWorld. Enchant effects persist to DB but are lost on relog until
+  # that stub is replaced.
+
+  defp handle_packet(%Client.RequestExEnchantSkillList{}, %{auth_state: :in_world} = state) do
+    skills = state.skills || %{}
+    enchants = Map.get(state, :skill_enchants, %{})
+
+    skill_list =
+      Enum.map(skills, fn {skill_id, skill_level} ->
+        enchant_level = Map.get(enchants, skill_id, 0)
+        sp_cost = skill_id * 10 * (enchant_level + 1)
+        %{skill_id: skill_id, skill_level: skill_level, sp_cost: sp_cost, chance: 50}
+      end)
+
+    send(
+      state.conn_pid,
+      {:send_packet, %Server.ExEnchantSkillList{type: 1, skills: skill_list}}
+    )
+
+    {:noreply, state}
+  end
+
+  defp handle_packet(%Client.RequestExEnchantSkillList{}, state), do: {:noreply, state}
+
+  defp handle_packet(
+         %Client.RequestExEnchantSkillInfo{skill_id: skill_id, skill_level: skill_level},
+         %{auth_state: :in_world} = state
+       ) do
+    enchant_level = Map.get(state, :skill_enchants, %{}) |> Map.get(skill_id, 0)
+    sp_cost = skill_id * 10 * (enchant_level + 1) * 10
+
+    pkt = %Server.ExEnchantSkillInfo{
+      skill_id: skill_id,
+      skill_level: skill_level,
+      sp_cost: sp_cost,
+      chance: 50,
+      required_items: [{729, 1}]
+    }
+
+    send(state.conn_pid, {:send_packet, pkt})
+    {:noreply, state}
+  end
+
+  defp handle_packet(%Client.RequestExEnchantSkillInfo{}, state), do: {:noreply, state}
+
+  defp handle_packet(
+         %Client.RequestExEnchantSkill{
+           skill_id: skill_id,
+           skill_level: skill_level,
+           enchant_scroll_object_id: scroll_obj_id
+         },
+         %{auth_state: :in_world} = state
+       ) do
+    enchants = Map.get(state, :skill_enchants, %{})
+    enchant_level = Map.get(enchants, skill_id, 0)
+    sp_cost = skill_id * 10 * (enchant_level + 1) * 10
+
+    items = Inventory.get_items(state.char_id)
+    scroll_entry = Enum.find(items, fn {inst, _tpl} -> inst.id == scroll_obj_id end)
+
+    cond do
+      state.sp < sp_cost ->
+        send(
+          state.conn_pid,
+          {:send_packet,
+           %Server.ExEnchantSkillResult{result: 0, skill_id: skill_id, skill_level: skill_level}}
+        )
+
+        {:noreply, state}
+
+      scroll_entry == nil ->
+        send(
+          state.conn_pid,
+          {:send_packet,
+           %Server.ExEnchantSkillResult{result: 0, skill_id: skill_id, skill_level: skill_level}}
+        )
+
+        {:noreply, state}
+
+      true ->
+        {_scroll_inst, scroll_tpl} = scroll_entry
+        is_safe = scroll_tpl.item_id == 6622
+        chance = if is_safe, do: 100, else: 50
+        success = :rand.uniform(100) <= chance
+
+        Inventory.remove_item(state.char_id, scroll_obj_id, 1)
+
+        new_sp = state.sp - sp_cost
+
+        if state.char_db_id do
+          Repo.update_all(
+            from(c in Character, where: c.id == ^state.char_db_id),
+            set: [sp: new_sp]
+          )
+        end
+
+        send(
+          state.conn_pid,
+          {:send_packet,
+           %Server.StatusUpdate{
+             object_id: state.char_id,
+             attributes: [{Server.StatusUpdate.attr_sp(), new_sp}]
+           }}
+        )
+
+        if success do
+          new_enchant = enchant_level + 1
+
+          if state.char_db_id do
+            CharacterSkill.update_enchant_level(state.char_db_id, skill_id, new_enchant)
+          end
+
+          new_enchants = Map.put(enchants, skill_id, new_enchant)
+
+          send(
+            state.conn_pid,
+            {:send_packet,
+             %Server.ExEnchantSkillResult{
+               result: 1,
+               skill_id: skill_id,
+               skill_level: skill_level
+             }}
+          )
+
+          {:noreply, %{state | sp: new_sp, skill_enchants: new_enchants}}
+        else
+          send(
+            state.conn_pid,
+            {:send_packet,
+             %Server.ExEnchantSkillResult{
+               result: 0,
+               skill_id: skill_id,
+               skill_level: skill_level
+             }}
+          )
+
+          {:noreply, %{state | sp: new_sp}}
+        end
+    end
+  end
+
+  defp handle_packet(%Client.RequestExEnchantSkill{}, state), do: {:noreply, state}
 
   defp handle_packet(packet, state) do
     Logger.debug("[PlayerSession] Unhandled packet: #{inspect(packet.__struct__)}")
@@ -5332,6 +5560,131 @@ defmodule L2E.Session.PlayerSession do
           {:ok, :toggle_invisible} ->
             {:noreply, %{state | invisible: !state.invisible}}
 
+          {:ok, {:give_item, item_id, count}} ->
+            case Inventory.add_item(state.char_id, item_id, count) do
+              {:ok, change_type, {instance, template}} ->
+                change_int = change_type_to_int(change_type)
+                pkt = %Server.InventoryUpdate{changes: [{change_int, instance, template}]}
+                send(state.conn_pid, {:send_packet, pkt})
+
+              {:error, reason} ->
+                Logger.warning("[Admin] give_item failed: #{inspect(reason)}")
+            end
+
+            {:noreply, state}
+
+          {:ok, {:announce, message}} ->
+            Phoenix.PubSub.broadcast(L2E.PubSub, "world:announce", {:server_announce, message})
+            {:noreply, state}
+
+          {:ok, :admin_heal} ->
+            GenServer.cast(self(), {:admin_heal})
+            {:noreply, state}
+
+          {:ok, {:heal, player_name}} ->
+            case Repo.get_by(Character, name: player_name) do
+              %Character{id: target_char_id} ->
+                case Registry.lookup(L2E.Session.Registry, target_char_id) do
+                  [{pid, _}] -> GenServer.cast(pid, {:admin_heal})
+                  _ -> :ok
+                end
+
+              nil ->
+                :ok
+            end
+
+            {:noreply, state}
+
+          {:ok, {:kill, player_name}} ->
+            case Repo.get_by(Character, name: player_name) do
+              %Character{id: target_char_id} ->
+                case Registry.lookup(L2E.Session.Registry, target_char_id) do
+                  [{pid, _}] -> GenServer.cast(pid, {:admin_force_kill})
+                  _ -> :ok
+                end
+
+              nil ->
+                :ok
+            end
+
+            {:noreply, state}
+
+          {:ok, :admin_force_kill} ->
+            GenServer.cast(self(), {:admin_force_kill})
+            {:noreply, state}
+
+          {:ok, {:set_level, level}} ->
+            GenServer.cast(self(), {:admin_set_level, level})
+            {:noreply, state}
+
+          {:ok, {:enchant, enchant_level}} ->
+            case state.target_id &&
+                   Registry.lookup(L2E.Session.Registry, state.target_id) do
+              [{pid, _}] -> GenServer.cast(pid, {:admin_set_enchant, enchant_level})
+              _ -> :ok
+            end
+
+            {:noreply, state}
+
+          {:ok, :npc_info} ->
+            debug_msg =
+              case state.target_id &&
+                     Registry.lookup(L2E.Session.Registry, {:npc, state.target_id}) do
+                [{npc_pid, _}] ->
+                  case GenServer.call(npc_pid, :get_debug_info, 1000) do
+                    info when is_binary(info) -> info
+                    info -> inspect(info)
+                  end
+
+                _ ->
+                  "No NPC targeted"
+              end
+
+            send(
+              state.conn_pid,
+              {:send_packet,
+               %Server.CreatureSay{
+                 char_id: 0,
+                 chat_type: 2,
+                 char_name: "GM",
+                 message: debug_msg
+               }}
+            )
+
+            {:noreply, state}
+
+          {:ok, {:siege, castle_id, action}} ->
+            case Registry.lookup(L2E.Siege.Registry, {:castle, castle_id}) do
+              [{pid, _}] ->
+                cast_msg = if action == :start, do: {:force_start}, else: {:force_stop}
+                GenServer.cast(pid, cast_msg)
+
+              _ ->
+                :ok
+            end
+
+            {:noreply, state}
+
+          {:ok, {:ban_char, char_name}} ->
+            case Repo.get_by(Character, name: char_name) do
+              %Character{account_name: account_name} when not is_nil(account_name) ->
+                Repo.update_all(
+                  from(a in Account, where: a.username == ^account_name),
+                  set: [access_level: -100]
+                )
+
+              _ ->
+                :ok
+            end
+
+            {:noreply, state}
+
+          {:ok, {:reload, _target}} ->
+            {:noreply, state}
+
+          {:ok, {:set_clan_level, _level}} ->
+            {:noreply, state}
+
           :ignored ->
             {:noreply, state}
         end
@@ -5409,6 +5762,16 @@ defmodule L2E.Session.PlayerSession do
       String.starts_with?(cmd, "_voiced.") ->
         "_voiced." <> voiced_cmd = cmd
         handle_voiced_command(voiced_cmd, state)
+
+      # M106: Grand Boss zone gate — bypass: "bossgate {npc_id}"
+      String.starts_with?(cmd, "bossgate ") ->
+        boss_npc_id =
+          cmd
+          |> String.split(" ", parts: 2)
+          |> List.last()
+          |> String.to_integer()
+
+        check_grand_boss_entry(boss_npc_id, state)
 
       true ->
         {:noreply, state}
@@ -5606,15 +5969,29 @@ defmodule L2E.Session.PlayerSession do
 
   defp handle_npc_bypass(_npc_id, _action, state), do: {:noreply, state}
 
-  # M99: Grand Boss zone entry gate
-  # Returns {:ok, new_state} if entry is allowed, {:denied, state} otherwise.
+  # M106: Grand Boss zone entry gate
+  # Atomically locks the instance via enter_instance/2, then teleports on success.
   defp check_grand_boss_entry(boss_npc_id, state) do
-    case GrandBossManager.can_enter?(boss_npc_id) do
-      true ->
-        GrandBossManager.enter_instance(boss_npc_id, state.char_id)
-        {:ok, %{state | boss_zone_id: boss_npc_id}}
+    case GrandBossManager.enter_instance(boss_npc_id, state.char_id) do
+      :ok ->
+        new_state = %{state | boss_zone_id: boss_npc_id}
 
-      false ->
+        case boss_entry_coords(boss_npc_id) do
+          {nil, nil, nil} ->
+            {:noreply, new_state}
+
+          coords ->
+            {:noreply, do_teleport(coords, new_state)}
+        end
+
+      {:error, reason} ->
+        msg =
+          case reason do
+            :boss_dead -> "The boss is not available right now."
+            :instance_occupied -> "The boss lair is already occupied."
+            _ -> "You may not enter the boss lair at this time."
+          end
+
         send(
           state.conn_pid,
           {:send_packet,
@@ -5622,13 +5999,20 @@ defmodule L2E.Session.PlayerSession do
              char_id: 0,
              chat_type: 2,
              char_name: "System",
-             message: "You may not enter the boss lair at this time."
+             message: msg
            }}
         )
 
-        {:denied, state}
+        {:noreply, state}
     end
   end
+
+  defp boss_entry_coords(29022), do: {-119_800, -1620, -1620}
+  defp boss_entry_coords(29028), do: {213_004, -115_159, -3680}
+  defp boss_entry_coords(29001), do: {-21610, 181_594, -5720}
+  defp boss_entry_coords(29006), do: {17726, 108_915, -6480}
+  defp boss_entry_coords(29014), do: {43728, 17220, -4342}
+  defp boss_entry_coords(_), do: {nil, nil, nil}
 
   # Execute a teleport: leave current region, move to new coords, enter new region
   defp do_teleport({x, y, z}, state) do

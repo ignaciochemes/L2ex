@@ -61,7 +61,13 @@ defmodule L2E.Quest.Registry do
       L2E.Quest.Scripts.Human1stClass,
       L2E.Quest.Scripts.Human2ndClass,
       L2E.Quest.Scripts.Elf1stClass,
-      L2E.Quest.Scripts.Elf2ndClass
+      L2E.Quest.Scripts.Elf2ndClass,
+      # M108 — Class Transfer Quests (Dark Elf, Orc, Dwarf)
+      L2E.Quest.Scripts.DarkElf1stClass,
+      L2E.Quest.Scripts.DarkElf2ndClass,
+      L2E.Quest.Scripts.Orc1stClass,
+      L2E.Quest.Scripts.Orc2ndClass,
+      L2E.Quest.Scripts.Dwarf1stClass
     ]
 
     Enum.each(quest_modules, &register/1)

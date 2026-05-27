@@ -20,6 +20,10 @@ defmodule L2E.Admin.CommandHandler do
   - `admin_kill <player_name>`                — instantly kill named player
   - `admin_ban_char <player_name>`            — ban character's account (access_level -100)
   - `admin_reload <skills|npcs|items|spawns>` — trigger best-effort data reload
+  - `admin_set_level <level>`                  — set GM's own level (1-85)
+  - `admin_enchant <level>`                    — set enchant level on targeted player's weapon
+  - `admin_npc_info`                           — print debug info about targeted NPC
+  - `admin_siege <castle_id> <start|stop>`     — force start or stop a siege
   """
 
   @type action ::
@@ -34,6 +38,11 @@ defmodule L2E.Admin.CommandHandler do
           | {:kill, player_name :: String.t()}
           | {:ban_char, char_name :: String.t()}
           | {:reload, target :: String.t()}
+          | :admin_force_kill
+          | {:set_level, level :: pos_integer()}
+          | {:enchant, enchant_level :: non_neg_integer()}
+          | :npc_info
+          | {:siege, castle_id :: pos_integer(), action :: :start | :stop}
 
   @doc """
   Parse an `admin_*` bypass string into a structured action.
@@ -97,6 +106,33 @@ defmodule L2E.Admin.CommandHandler do
         case Integer.parse(level_str) do
           {level, ""} when level in 1..8 -> {:ok, {:set_clan_level, level}}
           _ -> :ignored
+        end
+
+      ["kill"] ->
+        {:ok, :admin_force_kill}
+
+      ["set_level", level_str] ->
+        case Integer.parse(level_str) do
+          {level, ""} when level in 1..85 -> {:ok, {:set_level, level}}
+          _ -> :ignored
+        end
+
+      ["enchant", enchant_level_str] ->
+        case Integer.parse(enchant_level_str) do
+          {enchant_level, ""} when enchant_level >= 0 -> {:ok, {:enchant, enchant_level}}
+          _ -> :ignored
+        end
+
+      ["npc_info"] ->
+        {:ok, :npc_info}
+
+      ["siege", castle_id_str, action_str] when action_str in ["start", "stop"] ->
+        case Integer.parse(castle_id_str) do
+          {castle_id, ""} when castle_id > 0 ->
+            {:ok, {:siege, castle_id, String.to_atom(action_str)}}
+
+          _ ->
+            :ignored
         end
 
       _ ->

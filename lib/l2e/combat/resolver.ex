@@ -93,6 +93,24 @@ defmodule L2E.Combat.Resolver do
     end
   end
 
+  @doc """
+  Applies a skill enchant bonus to a power value.
+
+  Each enchant level adds 2% to the base power (Interlude formula).
+  Returns the boosted power.
+
+      enchant_bonus = 1.0 + enchant_level * 0.02
+      enchanted_power = base_power * enchant_bonus
+  """
+  @spec apply_enchant_to_power(number(), non_neg_integer()) :: float()
+  def apply_enchant_to_power(power, 0), do: power * 1.0
+
+  def apply_enchant_to_power(power, enchant_level) when enchant_level > 0 do
+    power * (1.0 + enchant_level * 0.02)
+  end
+
+  def apply_enchant_to_power(power, _), do: power * 1.0
+
   # -----------------------------------------------------------------------
   # Private
   # -----------------------------------------------------------------------

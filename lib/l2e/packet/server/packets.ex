@@ -3436,3 +3436,167 @@ defmodule L2E.Packet.Server.ExOlympiadSpelledInfo do
       effects_bin::binary>>
   end
 end
+
+# ---- M105: Cursed Weapon packets (0xFE extended) ----------------------------
+
+defmodule L2E.Packet.Server.ExCursedWeaponList do
+  @moduledoc """
+  0xFE/0x51 — Sends the full list of currently possessed cursed weapons to the client.
+  Sent on world entry.
+
+  Binary layout (little-endian):
+    0xFE(8)  sub_opcode(16LE=0x0051)  count(32LE)
+    per weapon: weapon_id(32LE)  object_id(32LE)  char_id(32LE)  stage(32LE)
+  """
+  @behaviour L2E.Packet.Encodable
+
+  defstruct [:weapons]
+
+  @impl L2E.Packet.Encodable
+  def encode(%__MODULE__{weapons: weapons}) do
+    list = weapons || []
+    count = length(list)
+
+    entries =
+      Enum.map_join(list, "", fn w ->
+        <<Map.get(w, :weapon_id, 0)::little-32, Map.get(w, :object_id, 0)::little-32,
+          Map.get(w, :owner_char_id, 0)::little-32, Map.get(w, :stage, 0)::little-32>>
+      end)
+
+    <<0xFE::8, 0x0051::little-16, count::little-32>> <> entries
+  end
+end
+
+defmodule L2E.Packet.Server.ExCursedWeaponLocation do
+  @moduledoc """
+  0xFE/0x52 — Broadcasts the in-world position of a possessed cursed weapon.
+
+  Binary layout (little-endian):
+    0xFE(8)  sub_opcode(16LE=0x0052)
+    count(32LE)=1  weapon_id(32LE)  char_id(32LE)
+    x(32LE-signed)  y(32LE-signed)  z(32LE-signed)
+  """
+  @behaviour L2E.Packet.Encodable
+
+  defstruct [:weapon_id, :char_id, :x, :y, :z]
+
+  @impl L2E.Packet.Encodable
+  def encode(%__MODULE__{} = p) do
+    <<0xFE::8, 0x0052::little-16, 1::little-32, p.weapon_id || 0::little-32,
+      p.char_id || 0::little-32, p.x || 0::little-32-signed, p.y || 0::little-32-signed,
+      p.z || 0::little-32-signed>>
+  end
+end
+
+# ---- M107: Skill Enchant packets (0xFE extended) ----------------------------
+
+defmodule L2E.Packet.Server.ExEnchantSkillList do
+  @moduledoc """
+  0xFE/0x16 — Sends the list of enchantable skills to the skill enchant UI.
+
+  Binary layout (little-endian):
+    0xFE(8)  sub_opcode(16LE=0x0016)
+    type(32LE)  count(32LE)
+    per skill: skill_id(32LE)  skill_level(32LE)  sp_cost(32LE)  chance(32LE)
+  """
+  @behaviour L2E.Packet.Encodable
+
+  defstruct [:type, :skills]
+
+  @impl L2E.Packet.Encodable
+  def encode(%__MODULE__{type: type, skills: skills}) do
+    list = skills || []
+    count = length(list)
+
+    entries =
+      Enum.map_join(list, "", fn s ->
+        <<Map.get(s, :skill_id, 0)::little-32, Map.get(s, :skill_level, 1)::little-32,
+          Map.get(s, :sp_cost, 0)::little-32, Map.get(s, :chance, 50)::little-32>>
+      end)
+
+    <<0xFE::8, 0x0016::little-16, type || 1::little-32, count::little-32>> <> entries
+  end
+end
+
+defmodule L2E.Packet.Server.ExEnchantSkillInfo do
+  @moduledoc """
+  0xFE/0x17 — Sends enchant details for a specific skill (SP cost, chance, required items).
+
+  Binary layout (little-endian):
+    0xFE(8)  sub_opcode(16LE=0x0017)
+    skill_id(32LE)  skill_level(32LE)  sp_cost(32LE)  chance(32LE)
+    item_count(32LE)
+    per item: item_id(32LE)  count(32LE)
+  """
+  @behaviour L2E.Packet.Encodable
+
+  # required_items: [{item_id, count}]
+  defstruct [:skill_id, :skill_level, :sp_cost, :chance, required_items: []]
+
+  @impl L2E.Packet.Encodable
+  def encode(%__MODULE__{} = p) do
+    items = p.required_items || []
+    item_count = length(items)
+
+    items_bin =
+      Enum.map_join(items, "", fn {item_id, count} ->
+        <<item_id::little-32, count::little-32>>
+      end)
+
+    <<0xFE::8, 0x0017::little-16, p.skill_id || 0::little-32, p.skill_level || 1::little-32,
+      p.sp_cost || 0::little-32, p.chance || 50::little-32, item_count::little-32>> <> items_bin
+  end
+end
+
+defmodule L2E.Packet.Server.ExEnchantSkillResult do
+  @moduledoc """
+  0xFE/0x18 — Reports the result of a skill enchant attempt.
+
+  result: 0 = fail, 1 = success, 2 = safe_success
+
+  Binary layout (little-endian):
+    0xFE(8)  sub_opcode(16LE=0x0018)
+    result(32LE)  skill_id(32LE)  skill_level(32LE)
+  """
+  @behaviour L2E.Packet.Encodable
+
+  defstruct [:result, :skill_id, :skill_level]
+
+  @impl L2E.Packet.Encodable
+  def encode(%__MODULE__{} = p) do
+    <<0xFE::8, 0x0018::little-16, p.result || 0::little-32, p.skill_id || 0::little-32,
+      p.skill_level || 1::little-32>>
+  end
+end
+
+defmodule L2E.Packet.Server.PetItemList do
+  @moduledoc """
+  0xB0 — Sends the pet's inventory item list to the client.
+
+  Binary layout (little-endian):
+    0xB0(8)  count(32LE)
+    per item:
+      object_id(32LE)  item_id(32LE)  count(32LE)
+      is_equipped(8)   enchant_level(32LE)
+  """
+  @behaviour L2E.Packet.Encodable
+
+  defstruct items: []
+
+  @impl L2E.Packet.Encodable
+  def encode(%__MODULE__{items: items}) do
+    list = items || []
+    count = length(list)
+
+    entries =
+      Enum.map_join(list, "", fn item ->
+        equipped = if Map.get(item, :slot, 0) != 0, do: 1, else: 0
+
+        <<Map.get(item, :object_id, 0)::little-32, Map.get(item, :item_id, 0)::little-32,
+          Map.get(item, :count, 1)::little-32, equipped::8,
+          Map.get(item, :enchant_level, 0)::little-32>>
+      end)
+
+    <<0xB0::8, count::little-32>> <> entries
+  end
+end

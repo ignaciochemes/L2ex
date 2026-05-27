@@ -60,6 +60,10 @@ defmodule L2E.Application do
       # M74: Castle door entities (DynamicSupervisor for door GenServers)
       L2E.World.DoorSupervisor,
 
+      # M105: Cursed Weapons — Registry + GenServer pair (Zariche & Akamanah)
+      {Registry, keys: :unique, name: L2E.Item.CursedWeapon.Registry},
+      L2E.Item.CursedWeapon.Supervisor,
+
       # M61-A: Grand Boss respawn window tracking
       L2E.GrandBoss.Supervisor,
 

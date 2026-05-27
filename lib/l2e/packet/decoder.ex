@@ -164,6 +164,7 @@ defmodule L2E.Packet.Decoder do
 
   # M72: Pet
   def decode(0x8A, body), do: Client.RequestPetUseItem.decode(body)
+  def decode(0x8E, body), do: Client.RequestPetItemList.decode(body)
   def decode(0x8F, body), do: Client.RequestPetGetItem.decode(body)
 
   # M86: Fishing
@@ -215,6 +216,11 @@ defmodule L2E.Packet.Decoder do
   defp decode_ext(0x31, body), do: Client.RequestSubclassInfo.decode(body)
   defp decode_ext(0x32, body), do: Client.RequestSubclassChange.decode(body)
   defp decode_ext(0x33, body), do: Client.RequestExAddSubclass.decode(body)
+
+  # M107: Skill Enchant (extended)
+  defp decode_ext(0x34, body), do: Client.RequestExEnchantSkillList.decode(body)
+  defp decode_ext(0x35, body), do: Client.RequestExEnchantSkillInfo.decode(body)
+  defp decode_ext(0x36, body), do: Client.RequestExEnchantSkill.decode(body)
 
   defp decode_ext(_sub, _body), do: {:error, :unknown_opcode}
 end

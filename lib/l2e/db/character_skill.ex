@@ -15,6 +15,7 @@ defmodule L2E.DB.CharacterSkill do
     belongs_to(:character, L2E.DB.Character)
     field(:skill_id, :integer)
     field(:skill_level, :integer, default: 1)
+    field(:enchant_level, :integer, default: 0)
     timestamps(type: :utc_datetime)
   end
 
@@ -23,7 +24,7 @@ defmodule L2E.DB.CharacterSkill do
   @spec changeset(%__MODULE__{}, map()) :: Ecto.Changeset.t()
   def changeset(skill, attrs) do
     skill
-    |> cast(attrs, [:character_id, :skill_id, :skill_level])
+    |> cast(attrs, [:character_id, :skill_id, :skill_level, :enchant_level])
     |> validate_required([:character_id, :skill_id, :skill_level])
     |> validate_number(:skill_level, greater_than: 0)
     |> foreign_key_constraint(:character_id)
@@ -44,6 +45,31 @@ defmodule L2E.DB.CharacterSkill do
       on_conflict: [set: [skill_level: skill_level]],
       conflict_target: [:character_id, :skill_id]
     )
+  end
+
+  @doc """
+  Loads enchant levels for all skills of a character.
+  Returns a map of %{skill_id => enchant_level}.
+  """
+  @spec load_enchant_levels(integer()) :: %{integer() => integer()}
+  def load_enchant_levels(character_id) do
+    Repo.all(from(s in __MODULE__, where: s.character_id == ^character_id))
+    |> Map.new(fn s -> {s.skill_id, s.enchant_level || 0} end)
+  end
+
+  @doc """
+  Updates the enchant level for a specific (character, skill) row.
+  """
+  @spec update_enchant_level(integer(), integer(), non_neg_integer()) :: :ok
+  def update_enchant_level(character_id, skill_id, enchant_level) do
+    Repo.update_all(
+      from(s in __MODULE__,
+        where: s.character_id == ^character_id and s.skill_id == ^skill_id
+      ),
+      set: [enchant_level: enchant_level]
+    )
+
+    :ok
   end
 
   @doc """

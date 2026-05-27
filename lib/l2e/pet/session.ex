@@ -92,8 +92,8 @@ defmodule L2E.Pet.Session do
       # Pet state
       food_level: 100,
       hungry: false,
-      # Pet inventory (future expansion)
-      pet_items: [],
+      # Pet inventory PID (started below)
+      inventory_pid: nil,
       # Behavior
       action: :follow,
       follow_timer: follow_timer,
@@ -106,6 +106,10 @@ defmodule L2E.Pet.Session do
       # Region process this pet currently belongs to (for AOI broadcasts)
       region_pid: nil
     }
+
+    # Start pet inventory process (linked to this process)
+    {:ok, inv_pid} = L2E.Pet.Inventory.start_link(pet_item_obj_id: pet_item_obj_id)
+    state = %{state | inventory_pid: inv_pid}
 
     # Announce this pet to the world so nearby players can see it on summon.
     Phoenix.PubSub.broadcast(L2E.PubSub, "world:pets", {:pet_spawned, state})
@@ -152,7 +156,14 @@ defmodule L2E.Pet.Session do
   end
 
   def handle_call(:get_items, _from, state) do
-    {:reply, state.pet_items, state}
+    items =
+      if state.inventory_pid != nil do
+        L2E.Pet.Inventory.get_items(state.inventory_pid)
+      else
+        []
+      end
+
+    {:reply, items, state}
   end
 
   @impl GenServer
@@ -228,6 +239,12 @@ defmodule L2E.Pet.Session do
     new_state = check_level_up(new_state)
     send(state.owner_pid, {:pet_exp_updated, new_state.exp, new_state.level})
     {:noreply, new_state}
+  end
+
+  # ---- M110: Unsummon on owner death -------------------------------------
+  def handle_cast(:unsummon, state) do
+    Logger.info("[Pet] Unsummoning pet #{state.pet_item_obj_id} — owner died")
+    {:stop, :normal, state}
   end
 
   def handle_cast(_, state), do: {:noreply, state}
