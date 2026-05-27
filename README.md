@@ -133,6 +133,7 @@ graph TB
         App --> GrandBossSup[GrandBoss.Supervisor<br/>DynamicSupervisor]
         App --> DayNightMgr[World.DayNightManager<br/>GenServer]
         App --> SevenSignsSup[SevenSigns.Supervisor]
+        App --> ManorSup[Manor.Supervisor]
     end
 ```
 
@@ -480,19 +481,24 @@ L2E:      1.0   2.0   3.9   7.8   15.4  (near-linear)
 | M108 – Class Transfer Quests (Dark Elf / Orc / Dwarf) | 5 new quest scripts registered in `Quest.Registry`: `DarkElf1stClass` (ID 405, Dark Fighter/Dark Mage → Palus Knight/Assassin/Shillien Oracle, level 20), `DarkElf2ndClass` (ID 406, level 40), `Orc1stClass` (ID 407, Orc Fighter/Mage → Monk/Raider/Shaman, level 20), `Orc2ndClass` (ID 408, level 40), `Dwarf1stClass` (ID 409, Dwarf Fighter → Scavenger/Artisan, level 20; no mage path, no 2nd class needed) |
 | M109 – Admin Commands Expansion | 8 new admin bypass commands: `admin_kill` (instant kill with `{:admin_force_kill}` cast), `admin_heal` (full HP/MP restore), `admin_give_item` (item to target inventory), `admin_set_level` (level override with `{:admin_set_level, level}` cast), `admin_announce` (PubSub broadcast to `"world:announce"`), `admin_enchant` (`{:admin_set_enchant, n}` cast), `admin_npc_info` (debug readout), `admin_siege` (`Siege.Castle.force_start/stop` via `Siege.Registry` lookup); target resolved via `Registry.lookup(L2E.Session.Registry, target_id)` |
 | M110 – Pet Inventory + Unsummon on Death | `L2E.Pet.Inventory` GenServer (started by `Pet.Session`; not separately supervised); `add_item/3`, `remove_item/3`, `get_items/1`, `get_weapon/1`, `equip_item/2` public API; `L2E.DB.PetItem` Ecto schema + `20260527000002_create_pet_items` migration (`pet_item_id`, `item_template_id`, `count`, `enchant_level`, `is_equipped`, `slot`); `handle_cast({:unsummon}, state)` in `Pet.Session` saves state to DB then `{:stop, :normal}`; `handle_info({:owner_died}, state)` in `PlayerSession` casts `:unsummon` to `pet_pid`; `PetItemList` (0xB0) server packet; `RequestPetItemList` (0x8E) handler proxies through `Pet.Session.get_items/1` |
+| M111 – Dialog + Tutorial stubs | `DlgAnswer` (0xC5) client packet; `handle_packet(%DlgAnswer{})` in `PlayerSession` routes answer to pending dialog context; tutorial bypass stubs for `RequestTutorialLinkHtml` (0x7B), `RequestTutorialPassCmdToServer` (0x7C), `RequestTutorialQuestionMark` (0x7D), `RequestTutorialClientEvent` (0x7E) — all no-ops returning `:ok` without crashing |
+| M69-B – Duel full | Auto-winner detection at ≤10% HP via `handle_cast({:player_hp_update, …})` in `Duel.Session`; zone boundary enforcement — duel cancelled when either player moves > 1600 units from start (`handle_cast({:player_moved, …})`); party duel support with `duel_type: :solo | :party` and per-party member tracking; surrender via `handle_cast({:surrender, char_id})` |
+| M61-C – SSQ player session wiring | `ssq_cabal: nil` and `ssq_score: 0` state fields in `PlayerSession`; subscribes to `"world:ssq"` PubSub on world entry; `handle_info({:ssq_period_changed, …})` resets score; `handle_packet(%RequestSSQStatus{})` calls `SevenSigns.Manager.get_period/0` + `get_scores/0` and replies with `SSQInfo` (0xFE/0xF4); `ssq_register_dawn` / `ssq_register_dusk` bypass handlers call `SevenSigns.Manager.register_cabal/2`; `L2E.Packet.Server.SSQInfo` struct added to `packets.ex` |
+| M114 – Recipe Shop | 6 client packet structs (`RequestRecipeBookOpen`, `RequestRecipeShopManageList`, `RequestRecipeShopListSet`, `RequestRecipeShopManageQuit`, `RequestRecipeShopMakeInfo`, `RequestRecipeShopMakeItem`); `recipe_shop: nil` state field in `PlayerSession`; 6 `handle_packet/2` clauses routing book open → `RecipeBookItemList`, shop manage → `RecipeShopManageList`, list set → shop state update, quit → clear state, make info → `RecipeShopItemInfo`, make item → ingredient validation + craft; server packets: `RecipeShopManageList` (0xD9), `RecipeShopSellList` (0xDA), `RecipeShopItemInfo` (0xDE), `RecipeBookItemList` (0xD2) |
+| M73-C – Castle Manor System | `L2E.Manor.Manager` GenServer with `:approved → :modifiable → :maintenance` state machine via `Process.send_after`; 9 hardcoded Interlude castles (gludio → schuttgart); broadcasts `{:manor_mode_changed, mode}` on `"world:manor"` PubSub; `get_mode/0`, `get_castles/0` public API; `L2E.Manor.Supervisor` one_for_one OTP subtree; `ExSendManorList` (0xFE/0x1B) + `ExShowManorDefaultInfo` (0xFE/0x1E) server packets; `RequestManorList` (0x8D) decode + `handle_packet` in `PlayerSession`; `castle_manor_production` + `castle_manor_procure` DB tables; `L2E.DB.ManorProduction` + `L2E.DB.ManorProcure` Ecto schemas |
 
 ### Next
 
 | Milestone | Description |
 |-----------|-------------|
-| M69-B – Duel full | Duel zone boundary enforcement; party duel support; winner determination on HP/surrender; PvP stat update |
-| M73-C – Manor system | Castle manor management GenServer; seed/crop cycles; `RequestManorList` / `RequestSetSeedSow` / `RequestSetCropProcure` client packets |
 | M93-B – Siege combat phase | Door HP display (`DoorStatusUpdate`); relic capture NPC interactions; `SiegeClanList` broadcast on attacker/defender join |
 | M97-B – Olympiad match full | Stadium teleport on match start; 3-minute time limit; surrender bypass command; `ExOlympiadMatchResult` wired to point update |
-| M111 – Sub-class system | Sub-class registration (max 3); SP pool per sub-class; level cap enforcement (70 max sub); `RequestExAddSubClass` / `RequestExSwitchSubClass` packets; `sub_classes` DB table |
-| M112 – Seven Signs | Festival of Darkness GenServer; seal/period state machine (7-day cycle); `ExShowScroolList` / `ExDivideAdena` packets; `SevenSigns.Manager` with ETS contribution tracking |
-| M113 – NPC Walker Paths | XML patrol path loader (`npcwalker.xml`); `NPC.Walker` behaviour with waypoint queue; `ProcessMoveToLocation` broadcast at each node; idle patrol, aggro interrupt |
-| M114 – Clan Hall | `ClanHall` GenServer with rental/ownership state; `ClanHallFunction` timed buffs; `RequestJoinSiege` for clan hall siege; `clan_halls` DB table |
+| M115 – Manor seed/crop full flow | `RequestSetSeedSow` (0xBA) + `RequestSetCropProcure` (0xBB) client packets; seed sowing validation against manor production list; crop procure matching; `ExShowSeedSetting` / `ExShowCropSetting` server packets; manor NPC bypass full routing |
+| M116 – Crafting (manufacturing) | `RequestRecipeShopMakeItem` atomic ingredient deduction + item creation; recipe success rate (skill level–based); `RecipeShopMsg` error feedback; `RequestMakeItemAbort` |
+| M117 – Sub-class system (full) | Sub-class registration (max 3); SP pool per sub-class; level cap enforcement (70 max sub); `RequestExAddSubClass` / `RequestExSwitchSubClass` packets with `SubclassData` validation |
+| M118 – Seven Signs Festival | Festival of Darkness GenServer; seal/period state machine (7-day cycle); `ExShowScreenMessage` cabal announcements; `SevenSigns.Manager` contribution accumulation |
+| M119 – NPC Walker Paths | XML patrol path loader (`npcwalker.xml`); `NPC.Walker` behaviour with waypoint queue; `ProcessMoveToLocation` broadcast at each node; idle patrol, aggro interrupt |
+| M120 – Clan Hall | `ClanHall` GenServer with rental/ownership state; `ClanHallFunction` timed buffs; `RequestJoinSiege` for clan hall siege; `clan_halls` DB table |
 
 ---
 
