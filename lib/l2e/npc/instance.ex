@@ -171,7 +171,7 @@ defmodule L2E.NPC.Instance do
       # M90: LoS gate for ranged NPC attacks; set false only in tests
       npc_can_see: true,
       # M124: Walker patrol
-      patrol_path: nil,
+      patrol_path: template.patrol_route,
       patrol_index: 0
     }
 
@@ -197,7 +197,8 @@ defmodule L2E.NPC.Instance do
     patrol = Map.get(state.template, :patrol_route)
 
     if is_list(patrol) and length(patrol) > 1 do
-      L2E.NPC.WalkingManager.register_patrol(self(), patrol)
+      speed_ms = if (state.template.walk_speed || 0) > 0, do: state.template.walk_speed, else: 3_000
+      L2E.NPC.WalkingManager.register_patrol(self(), patrol, speed_ms)
     end
   end
 
@@ -385,7 +386,14 @@ defmodule L2E.NPC.Instance do
       GenServer.cast(state.region_pid, {:broadcast_packet, move_pkt})
     end
 
-    {:noreply, %{state | position: {nx, ny, nz}}}
+    next_idx =
+      if is_list(state.patrol_path) and length(state.patrol_path) > 0 do
+        rem((state.patrol_index || 0) + 1, length(state.patrol_path))
+      else
+        (state.patrol_index || 0) + 1
+      end
+
+    {:noreply, %{state | position: {nx, ny, nz}, patrol_index: next_idx}}
   end
 
   def handle_cast({:advance_patrol, _pos}, state) do
@@ -522,14 +530,16 @@ defmodule L2E.NPC.Instance do
           nil
         end
 
-      {:noreply,
-       %{
-         state
-         | position: state.spawn_pos,
-           ai_state: :idle,
-           hp: state.template.max_hp * 1.0,
-           wander_timer: wander_timer
-       }}
+      new_state = %{
+        state
+        | position: state.spawn_pos,
+          ai_state: :idle,
+          hp: state.template.max_hp * 1.0,
+          wander_timer: wander_timer
+      }
+
+      maybe_resume_patrol(new_state)
+      {:noreply, new_state}
     else
       # M90: Use pathfinding to navigate around obstacles toward spawn
       {tx, ty, tz} =
@@ -688,7 +698,7 @@ defmodule L2E.NPC.Instance do
         nil
       end
 
-    %{
+    new_state = %{
       state
       | hate_map: %{},
         target_pid: nil,
@@ -697,6 +707,9 @@ defmodule L2E.NPC.Instance do
         attack_timer: nil,
         wander_timer: wander_timer
     }
+
+    maybe_resume_patrol(new_state)
+    new_state
   end
 
   defp execute_attack(state) do
@@ -892,6 +905,32 @@ defmodule L2E.NPC.Instance do
       if :rand.uniform(100) <= chance, do: [%{item_id: item_id, count: count}], else: []
     end)
   end
+
+  # M127: After transitioning back to :idle, broadcast movement to current patrol waypoint
+  # so clients see the NPC visually resume its route.
+  defp maybe_resume_patrol(%{patrol_path: path, patrol_index: idx, position: pos} = state)
+       when is_list(path) and length(path) > 0 do
+    {nx, ny, nz} = Enum.at(path, idx || 0)
+    {ox, oy, oz} = pos
+
+    move_pkt = %L2E.Packet.Server.CharMoveToLocation{
+      char_id: state.object_id,
+      x: nx,
+      y: ny,
+      z: nz,
+      origin_x: ox,
+      origin_y: oy,
+      origin_z: oz
+    }
+
+    if is_pid(state.region_pid) and Process.alive?(state.region_pid) do
+      GenServer.cast(state.region_pid, {:broadcast_packet, move_pkt})
+    end
+
+    :ok
+  end
+
+  defp maybe_resume_patrol(_state), do: :ok
 
   defp broadcast_to_region(%{region_pid: nil}, _packet), do: :ok
 

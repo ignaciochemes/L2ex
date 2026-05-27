@@ -156,8 +156,17 @@ defmodule L2E.Siege.Castle do
   # ---- Registration — only allowed in :preparation ----
 
   def handle_call({:register_attacker, clan_id}, _from, %{siege_state: :preparation} = state) do
-    {:reply, :ok,
-     %{state | registered_attackers: MapSet.put(state.registered_attackers, clan_id)}}
+    new_attackers = MapSet.put(state.registered_attackers, clan_id)
+    new_state = %{state | registered_attackers: new_attackers}
+
+    Phoenix.PubSub.broadcast(
+      L2E.PubSub,
+      "world:siege_#{state.castle_id}",
+      {:siege_clan_joined, state.castle_id, MapSet.to_list(new_attackers),
+       MapSet.to_list(state.registered_defenders)}
+    )
+
+    {:reply, :ok, new_state}
   end
 
   def handle_call({:register_attacker, _clan_id}, _from, state) do
@@ -165,8 +174,17 @@ defmodule L2E.Siege.Castle do
   end
 
   def handle_call({:register_defender, clan_id}, _from, %{siege_state: :preparation} = state) do
-    {:reply, :ok,
-     %{state | registered_defenders: MapSet.put(state.registered_defenders, clan_id)}}
+    new_defenders = MapSet.put(state.registered_defenders, clan_id)
+    new_state = %{state | registered_defenders: new_defenders}
+
+    Phoenix.PubSub.broadcast(
+      L2E.PubSub,
+      "world:siege_#{state.castle_id}",
+      {:siege_clan_joined, state.castle_id, MapSet.to_list(state.registered_attackers),
+       MapSet.to_list(new_defenders)}
+    )
+
+    {:reply, :ok, new_state}
   end
 
   def handle_call({:register_defender, _clan_id}, _from, state) do

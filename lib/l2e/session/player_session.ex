@@ -1738,14 +1738,16 @@ defmodule L2E.Session.PlayerSession do
          winner_char_id: 0,
          winner_name: "",
          loser_char_id: 0,
-         loser_name: ""
+         loser_name: "",
+         points_gained: 0,
+         points_lost: 0
        }}
     )
 
     {:noreply, state}
   end
 
-  def handle_info({:olympiad_match_result, :win, opponent_name, _points_delta}, state) do
+  def handle_info({:olympiad_match_result, :win, opponent_name, points_delta}, state) do
     send(
       state.conn_pid,
       {:send_packet,
@@ -1753,14 +1755,16 @@ defmodule L2E.Session.PlayerSession do
          winner_char_id: state.char_id,
          winner_name: state.char_name,
          loser_char_id: 0,
-         loser_name: opponent_name || ""
+         loser_name: opponent_name || "",
+         points_gained: max(points_delta, 0),
+         points_lost: 0
        }}
     )
 
     {:noreply, state}
   end
 
-  def handle_info({:olympiad_match_result, :loss, opponent_name, _points_delta}, state) do
+  def handle_info({:olympiad_match_result, :loss, opponent_name, points_delta}, state) do
     send(
       state.conn_pid,
       {:send_packet,
@@ -1768,7 +1772,9 @@ defmodule L2E.Session.PlayerSession do
          winner_char_id: 0,
          winner_name: opponent_name || "",
          loser_char_id: state.char_id,
-         loser_name: state.char_name
+         loser_name: state.char_name,
+         points_gained: 0,
+         points_lost: abs(min(points_delta, 0))
        }}
     )
 
@@ -1982,6 +1988,12 @@ defmodule L2E.Session.PlayerSession do
        %Server.CreatureSay{char_id: 0, chat_type: 0, char_name: "Siege", message: message}}
     )
 
+    {:noreply, state}
+  end
+
+  def handle_info({:siege_clan_joined, castle_id, attackers, defenders}, state) do
+    pkt = %Server.SiegeClanList{castle_id: castle_id, attackers: attackers, defenders: defenders}
+    send(state.conn_pid, {:send_packet, pkt})
     {:noreply, state}
   end
 
@@ -3219,6 +3231,19 @@ defmodule L2E.Session.PlayerSession do
   # This is injected before the existing Action handler; the first matching
   # clause wins, so this specific NPC-open case must live before the generic one.
   # NOTE: We handle this inside the Action handler by checking if the target is an NPC.
+
+  # ---- M93-B: Relic capture bypass ----
+
+  defp handle_packet(
+         %Client.RequestBypassToServer{command: "relic_capture " <> rest},
+         %{auth_state: :in_world} = state
+       ) do
+    castle_id = String.to_integer(String.trim(rest))
+    L2E.Siege.Castle.relic_captured(castle_id, state.clan_id)
+    {:noreply, state}
+  rescue
+    _ -> {:noreply, state}
+  end
 
   defp handle_packet(
          %L2E.Packet.Client.RequestBypassToServer{command: cmd},
@@ -5145,6 +5170,8 @@ defmodule L2E.Session.PlayerSession do
 
     case result do
       :ok ->
+        Phoenix.PubSub.subscribe(L2E.PubSub, "world:siege_#{castle_id}")
+
         Logger.info(
           "[PlayerSession] #{state.char_name} joined siege #{castle_id} as #{if is_attacker, do: "attacker", else: "defender"}"
         )
@@ -6164,6 +6191,14 @@ defmodule L2E.Session.PlayerSession do
       cmd == "duel_surrender" ->
         if state.active_duel_id do
           L2E.Duel.Session.surrender(state.active_duel_id, state.char_id)
+        end
+
+        {:noreply, state}
+
+      # M97-B: Olympiad surrender via bypass command
+      cmd == "olympiad_surrender" ->
+        if state.olympiad_match_pid != nil do
+          L2E.Olympiad.Match.surrender(state.olympiad_match_pid, state.char_id)
         end
 
         {:noreply, state}

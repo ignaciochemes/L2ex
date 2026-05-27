@@ -2926,6 +2926,31 @@ defmodule L2E.Packet.Server.SiegeDefenderList do
   end
 end
 
+defmodule L2E.Packet.Server.SiegeClanList do
+  @moduledoc "0xCF — Full attacker+defender clan list for a siege."
+  @behaviour L2E.Packet.Encodable
+
+  @opcode 0xCF
+
+  defstruct castle_id: 0, attackers: [], defenders: []
+
+  @impl L2E.Packet.Encodable
+  def encode(%__MODULE__{castle_id: castle_id, attackers: attackers, defenders: defenders}) do
+    att_count = length(attackers)
+    def_count = length(defenders)
+    att_data = for c <- attackers, into: <<>>, do: <<c::little-32>>
+    def_data = for c <- defenders, into: <<>>, do: <<c::little-32>>
+
+    body =
+      <<castle_id::little-32, att_count::little-32>> <>
+        att_data <>
+        <<def_count::little-32>> <>
+        def_data
+
+    <<@opcode::8>> <> body
+  end
+end
+
 # ---- FASE 3: Duel packets (0xFE extended) ------------------------------------
 
 defmodule L2E.Packet.Server.ExDuelAskStart do
@@ -3123,7 +3148,7 @@ defmodule L2E.Packet.Server.ExOlympiadMatchResult do
   """
   @behaviour L2E.Packet.Encodable
 
-  defstruct [:winner_char_id, :winner_name, :loser_char_id, :loser_name]
+  defstruct [:winner_char_id, :winner_name, :loser_char_id, :loser_name, points_gained: 0, points_lost: 0]
 
   @type t :: %__MODULE__{}
 
@@ -3132,7 +3157,9 @@ defmodule L2E.Packet.Server.ExOlympiadMatchResult do
         winner_char_id: winner_id,
         winner_name: winner_name,
         loser_char_id: loser_id,
-        loser_name: loser_name
+        loser_name: loser_name,
+        points_gained: points_gained,
+        points_lost: points_lost
       }) do
     winner_name_bin = encode_utf16le(winner_name || "")
     loser_name_bin = encode_utf16le(loser_name || "")
@@ -3141,7 +3168,7 @@ defmodule L2E.Packet.Server.ExOlympiadMatchResult do
       winner_name_bin <>
       <<loser_id || 0::little-32>> <>
       loser_name_bin <>
-      <<0::little-32>>
+      <<0::little-32, (points_gained || 0)::little-32, (points_lost || 0)::little-32>>
   end
 
   defp encode_utf16le(str) do
