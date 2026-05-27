@@ -118,6 +118,12 @@ defmodule L2E.Clan do
 
   def get_skills(clan_pid), do: GenServer.call(clan_pid, :get_skills)
 
+  @doc "Upload or clear the clan crest. crest_data is a binary (<<>> to delete)."
+  @spec set_crest(pos_integer(), binary()) :: :ok
+  def set_crest(clan_id, crest_data) do
+    GenServer.cast(via_tuple(clan_id), {:set_crest, crest_data})
+  end
+
   # ── Clan war public API ───────────────────────────────────────────────────────
 
   @doc "Declare war on a target clan. Returns :ok | {:error, :already_at_war} | {:error, :clan_level_too_low}"
@@ -231,7 +237,8 @@ defmodule L2E.Clan do
       # %{char_id => member()}
       members: %{},
       # %{char_id => {pid, timer_ref}}
-      pending_invites: %{}
+      pending_invites: %{},
+      crest: nil
     }
 
     state = add_member(state, leader_id, leader_pid)
@@ -519,6 +526,27 @@ defmodule L2E.Clan do
 
         {:noreply, new_state}
     end
+  end
+
+  def handle_cast({:set_crest, data}, state) do
+    new_state = %{state | crest: data}
+
+    Task.start(fn ->
+      %L2E.DB.ClanCrest{}
+      |> L2E.DB.ClanCrest.changeset(%{clan_id: state.clan_id, crest_data: data})
+      |> Repo.insert(
+        on_conflict: {:replace, [:crest_data, :updated_at]},
+        conflict_target: :clan_id
+      )
+    end)
+
+    Phoenix.PubSub.broadcast(
+      L2E.PubSub,
+      "clan:#{state.clan_id}",
+      {:crest_updated, state.clan_id, data}
+    )
+
+    {:noreply, new_state}
   end
 
   def handle_cast(_msg, state), do: {:noreply, state}
@@ -873,6 +901,8 @@ defmodule L2E.Clan do
         state
     end
   end
+
+  defp via_tuple(clan_id), do: {:via, Registry, {L2E.Session.Registry, {:clan, clan_id}}}
 
   defp register_member(char_id, clan_pid) do
     try do

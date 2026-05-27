@@ -2021,9 +2021,14 @@ defmodule L2E.Session.PlayerSession do
   def handle_info({:ssq_period_changed, period, _cycle}, state) do
     msg =
       case period do
-        1 -> "The Seven Signs competition period has begun! Register with a Priest of Dawn or Dusk."
-        2 -> "The Seven Signs competition has ended. The Seal Validation period has started."
-        _ -> "The Seven Signs period has changed."
+        1 ->
+          "The Seven Signs competition period has begun! Register with a Priest of Dawn or Dusk."
+
+        2 ->
+          "The Seven Signs competition has ended. The Seal Validation period has started."
+
+        _ ->
+          "The Seven Signs period has changed."
       end
 
     send(
@@ -3110,6 +3115,12 @@ defmodule L2E.Session.PlayerSession do
 
       if state.region_pid, do: GenServer.cast(state.region_pid, {:broadcast_packet, cast_pkt})
       send(state.conn_pid, {:send_packet, cast_pkt})
+      send(state.conn_pid, {:send_packet, %Server.SetupGauge{
+        type: 1,
+        object_id: state.char_id,
+        time: template.cast_time_ms,
+        max_time: template.cast_time_ms
+      }})
 
       ref =
         Process.send_after(
@@ -3282,6 +3293,7 @@ defmodule L2E.Session.PlayerSession do
 
   defp handle_packet(%L2E.Packet.Client.RequestRecipeShopManageList{}, state) do
     recipes = L2E.Inventory.get_recipes(state.char_id, true)
+
     pkt = %Server.RecipeShopManageList{
       seller_id: state.char_id,
       adena: Map.get(state, :adena, 0),
@@ -3289,6 +3301,7 @@ defmodule L2E.Session.PlayerSession do
       book_recipes: recipes,
       shop_items: Map.get(state.recipe_shop || %{}, :recipes, [])
     }
+
     send(state.conn_pid, {:send_packet, pkt})
     {:noreply, state}
   end
@@ -3297,10 +3310,16 @@ defmodule L2E.Session.PlayerSession do
     new_state = %{state | recipe_shop: %{recipes: recipes}}
     # Broadcast stall title to nearby players
     title = Map.get(state, :char_name, "Crafting")
-    send(state.conn_pid, {:send_packet, %Server.RecipeShopMsg{
-      object_id: state.char_id,
-      title: title
-    }})
+
+    send(
+      state.conn_pid,
+      {:send_packet,
+       %Server.RecipeShopMsg{
+         object_id: state.char_id,
+         title: title
+       }}
+    )
+
     {:noreply, new_state}
   end
 
@@ -3316,12 +3335,14 @@ defmodule L2E.Session.PlayerSession do
          state
        ) do
     {current_mp, max_mp} = {Map.get(state, :current_mp, 100), Map.get(state, :max_mp, 100)}
+
     pkt = %Server.RecipeShopItemInfo{
       manufacturer_id: shop_id,
       recipe_id: recipe_id,
       current_mp: current_mp,
       max_mp: max_mp
     }
+
     send(state.conn_pid, {:send_packet, pkt})
     {:noreply, state}
   end
@@ -3344,6 +3365,38 @@ defmodule L2E.Session.PlayerSession do
     castles = L2E.Manor.Manager.get_castles()
     pkt = %Server.ExSendManorList{castles: castles}
     send(state.conn_pid, {:send_packet, pkt})
+    {:noreply, state}
+  end
+
+  # M118: Manor — castle lord sets seed production
+  defp handle_packet(%L2E.Packet.Client.RequestSetSeed{castle_id: cid, entries: entries}, state) do
+    Enum.each(entries, fn e ->
+      L2E.Manor.Manager.sow_seed(cid, e.seed_id, e.amount)
+    end)
+    prod = L2E.Manor.Manager.get_production_list(cid)
+    send(state.conn_pid, {:send_packet, %L2E.Packet.Server.ExShowSeedSetting{castle_id: cid, entries: prod}})
+    {:noreply, state}
+  end
+
+  # M118: Manor — castle lord sets crop procure
+  defp handle_packet(%L2E.Packet.Client.RequestSetCrop{castle_id: cid, entries: entries}, state) do
+    Enum.each(entries, fn e ->
+      L2E.Manor.Manager.set_crop_procure(cid, e.item_id, e.amount)
+    end)
+    proc = L2E.Manor.Manager.get_procure_list(cid)
+    send(state.conn_pid, {:send_packet, %L2E.Packet.Server.ExShowCropSetting{castle_id: cid, entries: proc}})
+    {:noreply, state}
+  end
+
+  # M119: Clan Crest — leader uploads new crest image
+  defp handle_packet(%L2E.Packet.Client.RequestSetPledgeCrest{data: crest_data}, state) do
+    if not is_nil(state.clan_id) and state.clan_id > 0 do
+      L2E.Clan.set_crest(state.clan_id, crest_data)
+      send(state.conn_pid, {:send_packet, %Server.PledgeCrest{
+        crest_id: state.clan_id,
+        data: crest_data
+      }})
+    end
     {:noreply, state}
   end
 
@@ -6780,20 +6833,36 @@ defmodule L2E.Session.PlayerSession do
   defp handle_ssq_bypass("ssq_register_dawn", state) do
     L2E.SevenSigns.Manager.register_cabal(state.char_id, "dawn")
     new_state = %{state | ssq_cabal: :dawn}
-    send(state.conn_pid, {:send_packet, %Server.CreatureSay{
-      char_id: 0, chat_type: 2, char_name: "System",
-      message: "You have joined the Dawn."
-    }})
+
+    send(
+      state.conn_pid,
+      {:send_packet,
+       %Server.CreatureSay{
+         char_id: 0,
+         chat_type: 2,
+         char_name: "System",
+         message: "You have joined the Dawn."
+       }}
+    )
+
     {:noreply, new_state}
   end
 
   defp handle_ssq_bypass("ssq_register_dusk", state) do
     L2E.SevenSigns.Manager.register_cabal(state.char_id, "dusk")
     new_state = %{state | ssq_cabal: :dusk}
-    send(state.conn_pid, {:send_packet, %Server.CreatureSay{
-      char_id: 0, chat_type: 2, char_name: "System",
-      message: "You have joined the Dusk."
-    }})
+
+    send(
+      state.conn_pid,
+      {:send_packet,
+       %Server.CreatureSay{
+         char_id: 0,
+         chat_type: 2,
+         char_name: "System",
+         message: "You have joined the Dusk."
+       }}
+    )
+
     {:noreply, new_state}
   end
 

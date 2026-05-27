@@ -192,6 +192,9 @@ defmodule L2E.Packet.Decoder do
   # M115: Castle Manor
   def decode(0x8D, _body), do: {:ok, %Client.RequestManorList{}}
 
+  # M119: Clan Crest — leader uploads new crest image
+  def decode(0x53, body), do: Client.RequestSetPledgeCrest.decode(body)
+
   # ── Extended two-byte opcode space (0xD0 prefix) ────────────────────────────
   # Body starts with a little-endian 16-bit sub-opcode, then the real payload.
 
@@ -230,6 +233,10 @@ defmodule L2E.Packet.Decoder do
   defp decode_ext(0x34, body), do: Client.RequestExEnchantSkillList.decode(body)
   defp decode_ext(0x35, body), do: Client.RequestExEnchantSkillInfo.decode(body)
   defp decode_ext(0x36, body), do: Client.RequestExEnchantSkill.decode(body)
+
+  # M118: Manor — castle seed production settings
+  defp decode_ext(0x0A, body), do: Client.RequestSetSeed.decode(body)
+  defp decode_ext(0x0B, body), do: Client.RequestSetCrop.decode(body)
 
   defp decode_ext(_sub, _body), do: {:error, :unknown_opcode}
 end

@@ -3639,7 +3639,7 @@ defmodule L2E.Packet.Server.RecipeBookItemList do
         <<recipe_id::little-32, seq::little-32>>
       end)
 
-    <<@opcode::8, is_common::little-32, (max_mp || 0)::little-32, count::little-32>> <> entries
+    <<@opcode::8, is_common::little-32, max_mp || 0::little-32, count::little-32>> <> entries
   end
 end
 
@@ -3699,8 +3699,8 @@ defmodule L2E.Packet.Server.RecipeShopManageList do
         <<recipe_id::little-32, 0::little-32, cost::little-32>>
       end)
 
-    <<@opcode::8, (seller_id || 0)::little-32, (adena || 0)::little-32,
-      is_common::little-32, length(book)::little-32>> <>
+    <<@opcode::8, seller_id || 0::little-32, adena || 0::little-32, is_common::little-32,
+      length(book)::little-32>> <>
       book_bin <>
       <<length(shop)::little-32>> <>
       shop_bin
@@ -3748,9 +3748,8 @@ defmodule L2E.Packet.Server.RecipeShopSellList do
         <<recipe_id::little-32, 0::little-32, cost::little-32>>
       end)
 
-    <<@opcode::8, (mfr_id || 0)::little-32, (mfr_mp || 0)::little-32,
-      (mfr_max_mp || 0)::little-32, (buyer_adena || 0)::little-32,
-      length(list)::little-32>> <> items_bin
+    <<@opcode::8, mfr_id || 0::little-32, mfr_mp || 0::little-32, mfr_max_mp || 0::little-32,
+      buyer_adena || 0::little-32, length(list)::little-32>> <> items_bin
   end
 end
 
@@ -3782,8 +3781,8 @@ defmodule L2E.Packet.Server.RecipeShopItemInfo do
         current_mp: current_mp,
         max_mp: max_mp
       }) do
-    <<@opcode::8, (mfr_id || 0)::little-32, (recipe_id || 0)::little-32,
-      (current_mp || 0)::little-32, (max_mp || 0)::little-32, 0xFFFFFFFF::little-32>>
+    <<@opcode::8, mfr_id || 0::little-32, recipe_id || 0::little-32, current_mp || 0::little-32,
+      max_mp || 0::little-32, 0xFFFFFFFF::little-32>>
   end
 end
 
@@ -3800,16 +3799,19 @@ defmodule L2E.Packet.Server.ExSendManorList do
   """
   @behaviour L2E.Packet.Encodable
 
-  defstruct [castles: []]
+  defstruct castles: []
   @type t :: %__MODULE__{}
 
   @impl L2E.Packet.Encodable
   def encode(%__MODULE__{castles: castles}) do
     list = castles || []
-    castle_bin = Enum.map_join(list, "", fn %{id: id, name: name} ->
-      name_bin = :unicode.characters_to_binary(name || "", :utf8, {:utf16, :little}) <> <<0, 0>>
-      <<id::little-32>> <> name_bin
-    end)
+
+    castle_bin =
+      Enum.map_join(list, "", fn %{id: id, name: name} ->
+        name_bin = :unicode.characters_to_binary(name || "", :utf8, {:utf16, :little}) <> <<0, 0>>
+        <<id::little-32>> <> name_bin
+      end)
+
     <<0xFE::8, 0x1B::little-16, length(list)::little-32>> <> castle_bin
   end
 end
@@ -3834,21 +3836,21 @@ defmodule L2E.Packet.Server.ExShowManorDefaultInfo do
   """
   @behaviour L2E.Packet.Encodable
 
-  defstruct [hide_buttons: false, crops: []]
+  defstruct hide_buttons: false, crops: []
   @type t :: %__MODULE__{}
 
   @impl L2E.Packet.Encodable
   def encode(%__MODULE__{hide_buttons: hide_buttons, crops: crops}) do
     list = crops || []
     hide = if hide_buttons, do: 1, else: 0
-    crop_bin = Enum.map_join(list, "", fn crop ->
-      <<(crop.crop_id || 0)::little-32,
-        (crop.level || 1)::little-32,
-        (crop.seed_price || 0)::little-32,
-        (crop.crop_price || 0)::little-32,
-        1::8, (crop.reward1_item_id || 0)::little-32,
-        1::8, (crop.reward2_item_id || 0)::little-32>>
-    end)
+
+    crop_bin =
+      Enum.map_join(list, "", fn crop ->
+        <<crop.crop_id || 0::little-32, crop.level || 1::little-32,
+          crop.seed_price || 0::little-32, crop.crop_price || 0::little-32, 1::8,
+          crop.reward1_item_id || 0::little-32, 1::8, crop.reward2_item_id || 0::little-32>>
+      end)
+
     <<0xFE::8, 0x1E::little-16, hide::8, length(list)::little-32>> <> crop_bin
   end
 end
@@ -3876,17 +3878,16 @@ defmodule L2E.Packet.Server.SSQInfo do
   @impl L2E.Packet.Encodable
   def encode(%__MODULE__{} = p) do
     period_int = if p.period == 2, do: 2, else: 1
-    cabal_int = case p.player_cabal do
-      :dawn -> 1
-      :dusk -> 2
-      _ -> 0
-    end
-    <<@opcode::8,
-      period_int::little-32,
-      (p.dawn_score || 0)::little-32,
-      (p.dusk_score || 0)::little-32,
-      cabal_int::little-32,
-      (p.player_score || 0)::little-32,
+
+    cabal_int =
+      case p.player_cabal do
+        :dawn -> 1
+        :dusk -> 2
+        _ -> 0
+      end
+
+    <<@opcode::8, period_int::little-32, p.dawn_score || 0::little-32,
+      p.dusk_score || 0::little-32, cabal_int::little-32, p.player_score || 0::little-32,
       0::little-32, 0::little-32, 0::little-32, 0::little-32, 0::little-32>>
   end
 end
@@ -3914,6 +3915,67 @@ defmodule L2E.Packet.Server.RecipeShopMsg do
     title_bin =
       :unicode.characters_to_binary(title || "", :utf8, {:utf16, :little}) <> <<0, 0>>
 
-    <<@opcode::8, (object_id || 0)::little-32>> <> title_bin
+    <<@opcode::8, object_id || 0::little-32>> <> title_bin
+  end
+end
+
+# ---------------------------------------------------------------------------
+# M117: SetupGauge (0x6D) — shows a cast bar on the client
+#
+# Binary layout:
+#   0x6D(8), type(32LE), object_id(32LE), time(32LE), max_time(32LE)
+#
+# type: 1 = blue (magic cast), 3 = red (fishing)
+# Opcode verified: ServerPackets.java SETUP_GAUGE(0x6D)
+# Task brief said 0x91 — corrected to 0x6D per Java source.
+# ---------------------------------------------------------------------------
+defmodule L2E.Packet.Server.SetupGauge do
+  @moduledoc "Sends cast gauge (cast bar) to the client when a skill begins channeling."
+  @behaviour L2E.Packet.Encodable
+  defstruct type: 1, object_id: 0, time: 0, max_time: 0
+  @type t :: %__MODULE__{}
+  @impl L2E.Packet.Encodable
+  def encode(%__MODULE__{} = p) do
+    <<0x6D::8, p.type::little-32, p.object_id::little-32, p.time::little-32,
+      p.max_time::little-32>>
+  end
+end
+
+# ---------------------------------------------------------------------------
+# M117: MagicSkillCanceled (0x49) — tells client a skill cast was interrupted
+#
+# Binary layout:
+#   0x49(8), object_id(32LE)
+# Opcode verified: ServerPackets.java MAGIC_SKILL_CANCELD(0x49)
+# Task brief said 0xAF — corrected to 0x49 per Java source.
+# ---------------------------------------------------------------------------
+defmodule L2E.Packet.Server.MagicSkillCanceled do
+  @moduledoc "Tells the client that a skill cast was interrupted."
+  @behaviour L2E.Packet.Encodable
+  defstruct object_id: 0
+  @type t :: %__MODULE__{}
+  @impl L2E.Packet.Encodable
+  def encode(%__MODULE__{} = p) do
+    <<0x49::8, p.object_id::little-32>>
+  end
+end
+
+# ---------------------------------------------------------------------------
+# M119: PledgeCrest (0x6C) — sends clan crest image data to client
+#
+# Binary layout:
+#   0x6C(8), crest_id(32LE), data_len(32LE), data(binary)
+# Opcode verified: ServerPackets.java PLEDGE_CREST(0x6C)
+# Task brief said 0xA8 — corrected to 0x6C per Java source.
+# ---------------------------------------------------------------------------
+defmodule L2E.Packet.Server.PledgeCrest do
+  @moduledoc "Sends clan crest binary data to the client."
+  @behaviour L2E.Packet.Encodable
+  defstruct crest_id: 0, data: <<>>
+  @type t :: %__MODULE__{}
+  @impl L2E.Packet.Encodable
+  def encode(%__MODULE__{} = p) do
+    data_len = byte_size(p.data)
+    <<0x6C::8, p.crest_id::little-32, data_len::little-32, p.data::binary>>
   end
 end

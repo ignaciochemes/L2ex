@@ -9,9 +9,12 @@ defmodule L2E.Manor.Manager do
 
   @topic "world:manor"
   # Default period lengths in ms (can be overridden via config)
-  @approved_ms 6 * 60 * 60 * 1000    # 6 hours
-  @modifiable_ms 4 * 60 * 60 * 1000  # 4 hours
-  @maintenance_ms 5 * 60 * 1000      # 5 minutes
+  # 6 hours
+  @approved_ms 6 * 60 * 60 * 1000
+  # 4 hours
+  @modifiable_ms 4 * 60 * 60 * 1000
+  # 5 minutes
+  @maintenance_ms 5 * 60 * 1000
 
   # Castle data: list of %{id, name, seeds: [], crops: []}
   # Seeds and crops loaded at startup from ETS/config; empty list until DB milestone
@@ -27,12 +30,24 @@ defmodule L2E.Manor.Manager do
     %{id: 9, name: "schuttgart"}
   ]
 
-  defstruct [:mode, :timer, :castles]
+  defstruct [:mode, :timer, :castles, production: %{}, procure: %{}]
 
   def start_link(_opts), do: GenServer.start_link(__MODULE__, :ok, name: __MODULE__)
 
   def get_mode, do: GenServer.call(__MODULE__, :get_mode)
   def get_castles, do: GenServer.call(__MODULE__, :get_castles)
+
+  def sow_seed(castle_id, seed_id, amount),
+    do: GenServer.call(__MODULE__, {:sow_seed, castle_id, seed_id, amount})
+
+  def set_crop_procure(castle_id, item_id, amount),
+    do: GenServer.call(__MODULE__, {:set_crop_procure, castle_id, item_id, amount})
+
+  def get_production_list(castle_id),
+    do: GenServer.call(__MODULE__, {:get_production_list, castle_id})
+
+  def get_procure_list(castle_id),
+    do: GenServer.call(__MODULE__, {:get_procure_list, castle_id})
 
   @impl GenServer
   def init(:ok) do
@@ -45,6 +60,72 @@ defmodule L2E.Manor.Manager do
   @impl GenServer
   def handle_call(:get_mode, _from, state), do: {:reply, state.mode, state}
   def handle_call(:get_castles, _from, state), do: {:reply, state.castles, state}
+
+  def handle_call({:get_production_list, castle_id}, _from, state) do
+    {:reply, Map.get(state.production, castle_id, []), state}
+  end
+
+  def handle_call({:get_procure_list, castle_id}, _from, state) do
+    {:reply, Map.get(state.procure, castle_id, []), state}
+  end
+
+  def handle_call({:sow_seed, _castle_id, _seed_id, _amount}, _from, state)
+      when state.mode != :modifiable do
+    {:reply, {:error, :wrong_mode}, state}
+  end
+
+  def handle_call({:sow_seed, castle_id, seed_id, amount}, _from, state) do
+    entry = %{seed_id: seed_id, amount: amount, start_amount: amount, price: 0, period: 1}
+
+    existing = Map.get(state.production, castle_id, [])
+    updated = Enum.reject(existing, &(&1.seed_id == seed_id))
+    new_list = [entry | updated]
+    new_production = Map.put(state.production, castle_id, new_list)
+
+    attrs = %{
+      castle_id: castle_id,
+      seed_id: seed_id,
+      amount: amount,
+      start_amount: amount,
+      sold: 0,
+      price: 0
+    }
+
+    %L2E.DB.ManorProduction{}
+    |> L2E.DB.ManorProduction.changeset(attrs)
+    |> L2E.Repo.insert(on_conflict: :replace_all, conflict_target: [:castle_id, :seed_id])
+
+    {:reply, :ok, %{state | production: new_production}}
+  end
+
+  def handle_call({:set_crop_procure, _castle_id, _item_id, _amount}, _from, state)
+      when state.mode != :modifiable do
+    {:reply, {:error, :wrong_mode}, state}
+  end
+
+  def handle_call({:set_crop_procure, castle_id, item_id, amount}, _from, state) do
+    entry = %{item_id: item_id, amount: amount, start_amount: amount, reward_type: 0, price: 0, period: 1}
+
+    existing = Map.get(state.procure, castle_id, [])
+    updated = Enum.reject(existing, &(&1.item_id == item_id))
+    new_list = [entry | updated]
+    new_procure = Map.put(state.procure, castle_id, new_list)
+
+    attrs = %{
+      castle_id: castle_id,
+      item_id: item_id,
+      amount: amount,
+      start_amount: amount,
+      reward_type: 0,
+      cost: 0
+    }
+
+    %L2E.DB.ManorProcure{}
+    |> L2E.DB.ManorProcure.changeset(attrs)
+    |> L2E.Repo.insert(on_conflict: :replace_all, conflict_target: [:castle_id, :item_id])
+
+    {:reply, :ok, %{state | procure: new_procure}}
+  end
 
   @impl GenServer
   def handle_info(:transition, state) do

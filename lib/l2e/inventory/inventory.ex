@@ -31,6 +31,7 @@ defmodule L2E.Inventory do
 
   alias L2E.{Repo, DB.Item}
   alias L2E.Item.{Template, TemplateTable, Instance}
+  alias L2E.Data.ArmorSetData
 
   @registry L2E.Session.Registry
 
@@ -453,21 +454,42 @@ defmodule L2E.Inventory do
     end)
   end
 
+  # Paperdoll integer slot IDs as used by ArmorSetData (chest=10, legs=7, head=6, gloves=8, feet=9)
+  @paperdoll_ids %{head: 6, legs: 7, gloves: 8, feet: 9, chest: 10}
+
+  defp slot_to_paperdoll_id(slot), do: Map.get(@paperdoll_ids, slot)
+
   defp compute_equip_bonuses(items, paperdoll) do
-    Enum.reduce(paperdoll, %{p_atk: 0, p_def: 0, m_atk: 0, m_def: 0}, fn {_slot, id}, acc ->
-      with %Instance{} = inst <- Map.get(items, id),
-           %Template{} = tmpl <- TemplateTable.get(inst.item_id) do
-        %{
-          acc
-          | p_atk: acc.p_atk + tmpl.p_atk_bonus,
-            p_def: acc.p_def + tmpl.p_def_bonus,
-            m_atk: acc.m_atk + tmpl.m_atk_bonus,
-            m_def: acc.m_def + tmpl.m_def_bonus
-        }
-      else
-        _ -> acc
+    base_bonuses =
+      Enum.reduce(paperdoll, %{p_atk: 0, p_def: 0, m_atk: 0, m_def: 0}, fn {_slot, id}, acc ->
+        with %Instance{} = inst <- Map.get(items, id),
+             %Template{} = tmpl <- TemplateTable.get(inst.item_id) do
+          %{
+            acc
+            | p_atk: acc.p_atk + tmpl.p_atk_bonus,
+              p_def: acc.p_def + tmpl.p_def_bonus,
+              m_atk: acc.m_atk + tmpl.m_atk_bonus,
+              m_def: acc.m_def + tmpl.m_def_bonus
+          }
+        else
+          _ -> acc
+        end
+      end)
+
+    slot_to_template_id =
+      for {slot, inst_id} <- paperdoll,
+          inst = Map.get(items, inst_id),
+          not is_nil(inst),
+          tmpl = TemplateTable.get(inst.item_id),
+          not is_nil(tmpl),
+          slot_int = slot_to_paperdoll_id(slot),
+          not is_nil(slot_int),
+          into: %{} do
+        {slot_int, tmpl.item_id}
       end
-    end)
+
+    set_bonus = ArmorSetData.check_set_bonus(slot_to_template_id)
+    Map.merge(base_bonuses, set_bonus, fn _k, v1, v2 -> v1 + v2 end)
   end
 
   defp to_instance(%Item{} = i) do
