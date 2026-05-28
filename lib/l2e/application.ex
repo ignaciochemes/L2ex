@@ -117,8 +117,8 @@ defmodule L2E.Application do
       # Clan supervisor — manages active clan processes
       L2E.Clan.Supervisor,
 
-      # M85: Clan hall auction manager (singleton — one auction system for all halls)
-      L2E.ClanHall.AuctionManager,
+      # M85/M125: Clan hall subsystem — Registry + HallSupervisor + AuctionManager
+      L2E.ClanHall.Supervisor,
 
       # Warehouse supervisor — manages per-character warehouse processes
       L2E.Warehouse.Supervisor,

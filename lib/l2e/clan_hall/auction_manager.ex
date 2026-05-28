@@ -42,7 +42,22 @@ defmodule L2E.ClanHall.AuctionManager do
   @impl true
   def init(_opts) do
     schedule_next_resolution()
-    {:ok, %{}}
+    {:ok, %{}, {:continue, :spawn_halls}}
+  end
+
+  @impl true
+  def handle_continue(:spawn_halls, state) do
+    halls = L2E.Repo.all(L2E.DB.ClanHall)
+
+    Enum.each(halls, fn hall ->
+      DynamicSupervisor.start_child(
+        L2E.ClanHall.HallSupervisor,
+        {L2E.ClanHall.Hall, [hall_id: hall.hall_id]}
+      )
+    end)
+
+    Logger.info("[ClanHallAuction] Spawned #{length(halls)} hall processes")
+    {:noreply, state}
   end
 
   @impl true
@@ -172,9 +187,26 @@ defmodule L2E.ClanHall.AuctionManager do
     )
   end
 
-  defp return_losing_bids(_hall_id, _winning_clan_id) do
-    # TODO: deduct adena from winning clan warehouse and return to losers
-    # Requires full clan warehouse adena integration
-    :ok
+  defp return_losing_bids(hall_id, winning_clan_id) do
+    losing_bids =
+      L2E.Repo.all(
+        from(b in L2E.DB.ClanHallBid,
+          where: b.hall_id == ^hall_id and b.clan_id != ^winning_clan_id
+        )
+      )
+
+    Enum.each(losing_bids, fn bid ->
+      Logger.info(
+        "[ClanHall Auction] Returning #{bid.bid_amount} adena to clan #{bid.clan_id}"
+      )
+
+      L2E.Repo.delete(bid)
+
+      Phoenix.PubSub.broadcast(
+        L2E.PubSub,
+        "world:clan_hall",
+        {:bid_returned, bid.clan_id, bid.bid_amount}
+      )
+    end)
   end
 end

@@ -3148,7 +3148,14 @@ defmodule L2E.Packet.Server.ExOlympiadMatchResult do
   """
   @behaviour L2E.Packet.Encodable
 
-  defstruct [:winner_char_id, :winner_name, :loser_char_id, :loser_name, points_gained: 0, points_lost: 0]
+  defstruct [
+    :winner_char_id,
+    :winner_name,
+    :loser_char_id,
+    :loser_name,
+    points_gained: 0,
+    points_lost: 0
+  ]
 
   @type t :: %__MODULE__{}
 
@@ -3168,7 +3175,7 @@ defmodule L2E.Packet.Server.ExOlympiadMatchResult do
       winner_name_bin <>
       <<loser_id || 0::little-32>> <>
       loser_name_bin <>
-      <<0::little-32, (points_gained || 0)::little-32, (points_lost || 0)::little-32>>
+      <<0::little-32, points_gained || 0::little-32, points_lost || 0::little-32>>
   end
 
   defp encode_utf16le(str) do

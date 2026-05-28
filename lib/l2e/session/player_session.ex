@@ -5156,6 +5156,19 @@ defmodule L2E.Session.PlayerSession do
   end
 
   defp handle_packet(
+         %Client.RequestJoinSiege{castle_id: 0},
+         state
+       ) do
+    clan_id = Map.get(state, :clan_id, 0)
+
+    Logger.debug(
+      "[PlayerSession] Clan hall siege join request (castle_id=0) for clan=#{clan_id}"
+    )
+
+    {:noreply, state}
+  end
+
+  defp handle_packet(
          %Client.RequestJoinSiege{castle_id: castle_id, is_attacker: is_attacker},
          %{auth_state: :in_world} = state
        ) do

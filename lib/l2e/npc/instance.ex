@@ -197,7 +197,9 @@ defmodule L2E.NPC.Instance do
     patrol = Map.get(state.template, :patrol_route)
 
     if is_list(patrol) and length(patrol) > 1 do
-      speed_ms = if (state.template.walk_speed || 0) > 0, do: state.template.walk_speed, else: 3_000
+      speed_ms =
+        if (state.template.walk_speed || 0) > 0, do: state.template.walk_speed, else: 3_000
+
       L2E.NPC.WalkingManager.register_patrol(self(), patrol, speed_ms)
     end
   end
